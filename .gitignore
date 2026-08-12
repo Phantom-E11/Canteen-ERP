@@ -1,0 +1,9 @@
+# Node dependencies
+node_modules/
+dist/
+
+# Python artifacts
+__pycache__/
+
+# Database (Never upload the live database to public version control)
+canteenos.db
