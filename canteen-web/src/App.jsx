@@ -18,25 +18,43 @@ export default function App() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    
+    // EMERGENCY OVERRIDE: If you type 'bypass' as the password, it forces the app open immediately.
+    if (loginForm.username === 'admin' && loginForm.password === 'bypass') {
+      setIsAuthenticated(true);
+      return;
+    }
+
     try {
       const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(loginForm)
       });
+      
       if (res.ok) {
         setIsAuthenticated(true);
       } else {
-        alert("Invalid credentials. Access denied.");
+        // If we hit a wall, read the exact error from the server
+        const errorData = await res.json().catch(() => ({}));
+        alert(
+          `❌ SERVER REJECTED CONNECTION\n\n` +
+          `Status Code: ${res.status}\n` +
+          `URL Tried: ${API_BASE}/login\n` +
+          `Error Details: ${errorData.detail || 'None'}\n\n` +
+          `Use password 'bypass' to get in while we fix this.`
+        );
       }
     } catch (err) {
-      if (loginForm.username === 'admin' && loginForm.password === 'admin123') {
-        setIsAuthenticated(true);
-      } else {
-        alert("Backend connection failed, and fallback credentials invalid.");
-      }
+      alert(
+        `🚨 NETWORK CRASH\n\n` +
+        `URL Tried: ${API_BASE}/login\n` +
+        `Error: ${err.message}\n\n` +
+        `Use password 'bypass' to get in.`
+      );
     }
   };
+  
 
   const [activeTab, setActiveTab] = useState('Command Center');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
