@@ -14,7 +14,7 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
 
   // Base API URL supporting local dev and cloud environment variables
-  const API_BASE = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000/api`;
+  const API_BASE = "https://canteenos.onrender.com/api";
 
   const handleLogin = async (e) => {
     e.preventDefault();
