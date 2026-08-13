@@ -24,7 +24,6 @@ app.add_middleware(
 )
 
 def get_db():
-    # Pulls the secure Neon connection string directly from Render's environment variables
     conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
 
@@ -36,12 +35,12 @@ def startup():
             
         with get_db() as conn:
             cur = conn.cursor()
-            # If your schema.sql has SQLite specifics like AUTOINCREMENT, 
-            # you will need to change them to SERIAL for Postgres to accept it.
             cur.execute(schema)
             
-            # Auto-create default admin in database if none exists
             cur.execute("CREATE TABLE IF NOT EXISTS Admin_Users (id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT)")
+            cur.execute("CREATE TABLE IF NOT EXISTS Friday_Schedules (id SERIAL PRIMARY KEY, target_date DATE, week_num INTEGER, staff_name TEXT)")
+            cur.execute("CREATE TABLE IF NOT EXISTS Attendance_Log (id SERIAL PRIMARY KEY, log_date DATE, staff_id INTEGER, status TEXT)")
+            
             cur.execute("SELECT id FROM Admin_Users")
             if not cur.fetchone():
                 default_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode('utf-8')
@@ -59,6 +58,10 @@ class UpdateCredentials(BaseModel):
     new_username: str
     new_password: str
 
+class BranchCreate(BaseModel):
+    name: str
+    location: str
+
 class ProcurementItem(BaseModel):
     item: str
     quantity: float
@@ -70,6 +73,9 @@ class TicketItem(BaseModel):
     branchId: int
     count: int
     value: float
+
+class CustomerCreate(BaseModel):
+    name: str
 
 class TransactionItem(BaseModel):
     customer_id: int
@@ -90,7 +96,20 @@ class StaffCreate(BaseModel):
     name: str
     rate: float
 
-# --- 1. AUTHENTICATION & SECURITY ---
+class ScheduleLock(BaseModel):
+    target_date: str
+    week1: List[str]
+    week2: List[str]
+
+class AttendanceRecord(BaseModel):
+    staff_id: int
+    status: str
+
+class AttendancePayload(BaseModel):
+    date: str
+    records: List[AttendanceRecord]
+
+# --- AUTHENTICATION ---
 @app.post("/api/login")
 def login(req: LoginRequest):
     with get_db() as conn:
@@ -118,7 +137,41 @@ def update_credentials(creds: UpdateCredentials):
         conn.commit()
     return {"status": "success", "message": "Credentials updated successfully."}
 
-# --- 2. PROCUREMENT LEDGER ---
+# --- ADMINISTRATION ---
+@app.post("/api/branches")
+def add_branch(branch: BranchCreate):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO Branches (name, location) VALUES (%s, %s)", (branch.name, branch.location))
+        conn.commit()
+    return {"status": "success"}
+
+@app.get("/api/branches")
+def get_branches():
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM Branches")
+        return cur.fetchall()
+
+@app.post("/api/staff")
+async def add_staff(staff: StaffCreate):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO staff (full_name, role, daily_rate, status) VALUES (%s, 'Staff', %s, 'Active')", (staff.name, staff.rate))
+        conn.commit()
+    return {"message": "Staff added successfully"}
+
+@app.get("/api/staff")
+async def get_staff():
+    try:
+        with get_db() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT id, full_name as name, daily_rate as rate, status FROM staff WHERE status = 'Active'")
+            return cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        return []
+
+# --- PROCUREMENT ---
 @app.post("/api/procurement")
 def log_procurement(data: ProcurementItem):
     with get_db() as conn:
@@ -137,7 +190,7 @@ def get_todays_procurement():
         cur.execute("SELECT * FROM Procurement_Ledger WHERE date_logged::date = CURRENT_DATE ORDER BY id DESC")
         return cur.fetchall()
 
-# --- 3. CORPORATE TICKETS ---
+# --- CORPORATE TICKETS ---
 @app.post("/api/tickets")
 def log_ticket(data: TicketItem):
     total = data.count * data.value
@@ -154,11 +207,30 @@ def log_ticket(data: TicketItem):
 def archive_branch_tickets(branch_id: int):
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE Corporate_Tickets SET submitted = 1 WHERE branch_id = %s AND submitted = 0", (branch_id,))
+        cur.execute("UPDATE Corporate_Tickets SET submitted = TRUE WHERE branch_id = %s AND submitted = FALSE", (branch_id,))
         conn.commit()
     return {"status": "success"}
 
-# --- 4. FINANCE & CUSTOMER DEBT ---
+# --- FINANCE & CUSTOMER DEBT ---
+@app.post("/api/customers")
+def add_customer(data: CustomerCreate):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO Customers (name, balance) VALUES (%s, 0.0)", (data.name,))
+        conn.commit()
+    return {"status": "success"}
+
+@app.get("/api/customers")
+def get_customers():
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM Customers ORDER BY name ASC")
+        customers = cur.fetchall()
+        for c in customers:
+            cur.execute("SELECT id, transaction_type as type, amount, notes, TO_CHAR(transaction_date, 'YYYY-MM-DD') as date FROM Credit_Transactions WHERE customer_id = %s ORDER BY id DESC", (c['id'],))
+            c['history'] = cur.fetchall()
+        return customers
+
 @app.post("/api/finance/transaction")
 def log_customer_transaction(data: TransactionItem):
     with get_db() as conn:
@@ -174,7 +246,28 @@ def log_customer_transaction(data: TransactionItem):
         conn.commit()
     return {"status": "success"}
 
-# --- 5. EVENING AUDIT & RECONCILIATION ---
+# --- HR & SCHEDULING ---
+@app.post("/api/schedule/lock")
+def lock_schedule(data: ScheduleLock):
+    with get_db() as conn:
+        cur = conn.cursor()
+        for name in data.week1:
+            cur.execute("INSERT INTO Friday_Schedules (target_date, week_num, staff_name) VALUES (%s, 1, %s)", (data.target_date, name))
+        for name in data.week2:
+            cur.execute("INSERT INTO Friday_Schedules (target_date, week_num, staff_name) VALUES (%s, 2, %s)", (data.target_date, name))
+        conn.commit()
+    return {"status": "success"}
+
+@app.post("/api/attendance")
+def log_attendance(data: AttendancePayload):
+    with get_db() as conn:
+        cur = conn.cursor()
+        for record in data.records:
+            cur.execute("INSERT INTO Attendance_Log (log_date, staff_id, status) VALUES (%s, %s, %s)", (data.date, record.staff_id, record.status))
+        conn.commit()
+    return {"status": "success"}
+
+# --- EVENING AUDIT & DASHBOARD ---
 @app.post("/api/audit")
 def log_evening_audit(data: AuditItem):
     gross = data.cash + data.transfers
@@ -195,7 +288,6 @@ def log_evening_audit(data: AuditItem):
         conn.commit()
     return {"status": "success", "net_profit": net}
 
-# --- 6. COMMAND CENTER METRICS ---
 @app.get("/api/dashboard")
 def get_dashboard_metrics():
     with get_db() as conn:
@@ -222,37 +314,3 @@ def get_dashboard_metrics():
             "new_debt": new_debt,
             "recovered_debt": rec_debt
         }
-
-@app.post("/api/staff")
-async def add_staff(staff: StaffCreate):
-    with get_db() as conn:
-        cur = conn.cursor()
-        
-        # Creates the staff table if it doesn't already exist
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS staff (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                rate REAL NOT NULL,
-                status TEXT NOT NULL
-            )
-        ''')
-        
-        cur.execute('''
-            INSERT INTO staff (name, rate, status)
-            VALUES (%s, %s, 'Active')
-        ''', (staff.name, staff.rate))
-        
-        conn.commit()
-    return {"message": "Staff added successfully"}
-
-@app.get("/api/staff")
-async def get_staff():
-    try:
-        with get_db() as conn:
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT * FROM staff WHERE status = 'Active'")
-            return cur.fetchall()
-    except psycopg2.errors.UndefinedTable:
-        # Returns empty list if table doesn't exist yet
-        return []

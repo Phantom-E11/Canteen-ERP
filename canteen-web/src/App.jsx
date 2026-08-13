@@ -10,21 +10,13 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 
 export default function App() {
   // --- AUTHENTICATION STATE ---
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('canteen_token'));
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
 
-  // Base API URL supporting local dev and cloud environment variables
   const API_BASE = "https://canteenos.onrender.com/api";
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    
-    // EMERGENCY OVERRIDE: If you type 'bypass' as the password, it forces the app open immediately.
-    if (loginForm.username === 'admin' && loginForm.password === 'bypass') {
-      setIsAuthenticated(true);
-      return;
-    }
-
     try {
       const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
@@ -33,29 +25,18 @@ export default function App() {
       });
       
       if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('canteen_token', data.access_token);
         setIsAuthenticated(true);
       } else {
-        // If we hit a wall, read the exact error from the server
         const errorData = await res.json().catch(() => ({}));
-        alert(
-          `❌ SERVER REJECTED CONNECTION\n\n` +
-          `Status Code: ${res.status}\n` +
-          `URL Tried: ${API_BASE}/login\n` +
-          `Error Details: ${errorData.detail || 'None'}\n\n` +
-          `Use password 'bypass' to get in while we fix this.`
-        );
+        alert(`❌ SERVER REJECTED CONNECTION\nStatus Code: ${res.status}\nError Details: ${errorData.detail || 'None'}`);
       }
     } catch (err) {
-      alert(
-        `🚨 NETWORK CRASH\n\n` +
-        `URL Tried: ${API_BASE}/login\n` +
-        `Error: ${err.message}\n\n` +
-        `Use password 'bypass' to get in.`
-      );
+      alert(`🚨 NETWORK CRASH\nURL Tried: ${API_BASE}/login\nError: ${err.message}`);
     }
   };
   
-
   const [activeTab, setActiveTab] = useState('Command Center');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
@@ -72,10 +53,17 @@ export default function App() {
 
   // --- HR & SCHEDULING STATE ---
   const [showDraft, setShowDraft] = useState(false);
+  const [targetFriday, setTargetFriday] = useState('');
   const [draftPreview, setDraftPreview] = useState({ week1: [], week2: [] });
   const [staffRoster, setStaffRoster] = useState([]);
-  const dailyPayroll = staffRoster.filter(s => s.status === 'Active').reduce((sum, s) => sum + s.rate, 0);
+  const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [attendanceMap, setAttendanceMap] = useState({});
   
+  // Calculate active payroll based on marked attendance, defaulting to full roster if none marked yet
+  const markedPresent = Object.values(attendanceMap).filter(v => v === 'PRESENT').length;
+  const dailyPayroll = markedPresent > 0 
+    ? staffRoster.filter(s => attendanceMap[s.id] === 'PRESENT').reduce((sum, s) => sum + s.rate, 0)
+    : staffRoster.reduce((sum, s) => sum + s.rate, 0);
 
   // --- PROCUREMENT STATE ---
   const [procurementForm, setProcurementForm] = useState({ item: '', quantity: '', unit: 'Bags', cost: '', method: 'CASH' });
@@ -126,8 +114,20 @@ export default function App() {
 
         const staffRes = await fetch(`${API_BASE}/staff`);
         if (staffRes.ok) {
-           setStaffRoster(await staffRes.json());
+           const staffData = await staffRes.json();
+           setStaffRoster(staffData);
+           // Default everyone to PRESENT
+           const initialAttendance = {};
+           staffData.forEach(s => initialAttendance[s.id] = 'PRESENT');
+           setAttendanceMap(initialAttendance);
         }
+
+        const branchRes = await fetch(`${API_BASE}/branches`);
+        if (branchRes.ok) setBranches(await branchRes.json());
+
+        const custRes = await fetch(`${API_BASE}/customers`);
+        if (custRes.ok) setCustomers(await custRes.json());
+        
       } catch (error) {
         console.error("Backend connection active but data pull failed:", error);
       }
@@ -138,7 +138,10 @@ export default function App() {
   const money = (val) => `₦${Number(val).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
   
   // --- HANDLERS ---
-  const handleLogout = () => setIsAuthenticated(false);
+  const handleLogout = () => {
+    localStorage.removeItem('canteen_token');
+    setIsAuthenticated(false);
+  };
   const handleNotifications = () => alert("You have 0 new system alerts.");
   
   const handleTabChange = (tabName) => {
@@ -146,10 +149,19 @@ export default function App() {
     setIsSidebarOpen(false);
   };
 
-  const handleBranchSubmit = (e) => {
+  const handleBranchSubmit = async (e) => {
     e.preventDefault();
-    setBranches([...branches, { id: Date.now(), name: newBranch.name, location: newBranch.location, status: 'Open' }]);
-    setNewBranch({ name: '', location: '' });
+    try {
+      await fetch(`${API_BASE}/branches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newBranch.name, location: newBranch.location })
+      });
+      setBranches([...branches, { id: Date.now(), name: newBranch.name, location: newBranch.location, status: 'Open' }]);
+      setNewBranch({ name: '', location: '' });
+    } catch(err) {
+      alert("Failed to save branch to database.");
+    }
   };
 
   const handleSecurityUpdate = async (e) => {
@@ -169,7 +181,6 @@ export default function App() {
     }
   };
 
-  const handleAuditChange = (e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value });
   const handleAuditSubmit = async (e) => { 
     e.preventDefault(); 
     try {
@@ -209,10 +220,19 @@ export default function App() {
     }
   };
 
-  const handleAddCustomer = (e) => {
+  const handleAddCustomer = async (e) => {
     e.preventDefault();
-    setCustomers([...customers, { id: Date.now(), name: newCustomerName, company: 'Client', balance: 0, history: [] }]);
-    setNewCustomerName('');
+    try {
+      await fetch(`${API_BASE}/customers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newCustomerName })
+      });
+      setCustomers([...customers, { id: Date.now(), name: newCustomerName, balance: 0, history: [] }]);
+      setNewCustomerName('');
+    } catch (err) {
+      alert("Failed to create customer tab.");
+    }
   };
 
   const handleTransaction = async (type) => {
@@ -279,7 +299,6 @@ export default function App() {
   const handleAddStaff = async (e) => {
     e.preventDefault();
     const rateNum = Number(newStaff.rate);
-    
     try {
       await fetch(`${API_BASE}/staff`, {
         method: 'POST',
@@ -287,17 +306,41 @@ export default function App() {
         body: JSON.stringify({ name: newStaff.name, rate: rateNum })
       });
       
-      const newEmployee = {
-        id: Date.now(), // Fallback ID until next database refresh
-        name: newStaff.name,
-        rate: rateNum,
-        status: 'Active'
-      };
-      
+      const newEmployee = { id: Date.now(), name: newStaff.name, rate: rateNum, status: 'Active' };
       setStaffRoster([...staffRoster, newEmployee]);
+      setAttendanceMap({...attendanceMap, [newEmployee.id]: 'PRESENT'});
       setNewStaff({ name: '', rate: '' });
     } catch (err) {
       alert("Failed to save staff member to database.");
+    }
+  };
+
+  const handleLockSchedule = async () => {
+    try {
+      await fetch(`${API_BASE}/schedule/lock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_date: targetFriday, week1: draftPreview.week1, week2: draftPreview.week2 })
+      });
+      alert("Schedule Authorized! Locked into database.");
+      setShowDraft(false);
+      document.querySelectorAll('.volunteer-cb').forEach(cb => cb.checked = false);
+    } catch (e) {
+      alert("Database error. Failed to lock schedule.");
+    }
+  };
+
+  const handleLockAttendance = async () => {
+    const records = Object.entries(attendanceMap).map(([id, status]) => ({ staff_id: Number(id), status }));
+    try {
+      await fetch(`${API_BASE}/attendance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: attendanceDate, records })
+      });
+      alert(`Attendance locked for ${attendanceDate}! Payroll calculated.`);
+    } catch(e) {
+      alert("Failed to inject attendance into database.");
     }
   };
 
@@ -313,7 +356,6 @@ export default function App() {
     { name: 'Administration', icon: Settings },
   ];
 
-  // --- MOBILE-OPTIMIZED LOGIN SCREEN RENDER ---
   if (!isAuthenticated) {
     return (
       <div className="flex h-screen w-full bg-[#1A4D2E] items-center justify-center font-sans p-4">
@@ -339,16 +381,12 @@ export default function App() {
     );
   }
 
-  // --- MAIN APP RENDER ---
   return (
     <div className="flex h-screen w-full bg-[#f8f9fa] font-sans text-gray-800 overflow-hidden relative">
-      
-      {/* MOBILE SIDEBAR OVERLAY */}
       {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/40 z-40 md:hidden transition-opacity" onClick={() => setIsSidebarOpen(false)} />
       )}
 
-      {/* RESPONSIVE SIDEBAR */}
       <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-gray-200 flex flex-col justify-between transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div>
           <div className="h-20 flex items-center justify-between px-6 border-b border-gray-100">
@@ -382,10 +420,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
-        
-        {/* MOBILE-OPTIMIZED TOP NAVBAR */}
         <header className="h-16 md:h-20 bg-white border-b border-gray-200 flex items-center justify-between px-4 md:px-8 z-0 flex-shrink-0">
           <div className="flex items-center gap-4 w-full">
             <button className="md:hidden text-gray-600 p-1 hover:bg-gray-100 rounded-md" onClick={() => setIsSidebarOpen(true)}>
@@ -403,7 +438,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* CANVAS */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8 w-full">
           
           {/* VIEW: COMMAND CENTER */}
@@ -491,8 +525,11 @@ export default function App() {
                     <h3 className="text-sm font-bold text-gray-900">Staff on Leave</h3>
                   </div>
                   <div className="space-y-2 overflow-y-auto flex-1 pr-1">
-                    {staffRoster.filter(s => s.status === 'Scheduled Off' || s.status === 'Impromptu Off').length === 0 && (
-                      <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">All active staff working today.</p>
+                    {staffRoster.filter(s => attendanceMap[s.id] === 'ABSENT').map(s => (
+                      <div key={s.id} className="text-xs text-gray-600 p-2 bg-gray-50 rounded-md border border-gray-100">{s.name} - Marked Absent</div>
+                    ))}
+                    {staffRoster.filter(s => attendanceMap[s.id] === 'ABSENT').length === 0 && (
+                      <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">All active staff present today.</p>
                     )}
                   </div>
                 </div>
@@ -523,11 +560,11 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                         <div>
                           <label className="block text-sm font-bold text-gray-700 mb-2">Total Cash Counted (₦)</label>
-                          <input type="number" name="cash" value={auditForm.cash} onChange={handleAuditChange} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
+                          <input type="number" name="cash" value={auditForm.cash} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-gray-700 mb-2">Total Bank Transfers (₦)</label>
-                          <input type="number" name="transfers" value={auditForm.transfers} onChange={handleAuditChange} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
+                          <input type="number" name="transfers" value={auditForm.transfers} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
                         </div>
                       </div>
                     </div>
@@ -535,8 +572,8 @@ export default function App() {
                     <div>
                       <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 2: Leftover Inventory</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-                        <div><label className="block text-sm font-medium text-gray-700 mb-2">Rice Leftover (Spoons)</label><input type="number" name="leftoverRiceSpoons" value={auditForm.leftoverRiceSpoons} onChange={handleAuditChange} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all" /></div>
-                        <div><label className="block text-sm font-medium text-gray-700 mb-2">Swallow Leftover (Wraps)</label><input type="number" name="leftoverSwallowWraps" value={auditForm.leftoverSwallowWraps} onChange={handleAuditChange} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all" /></div>
+                        <div><label className="block text-sm font-medium text-gray-700 mb-2">Rice Leftover (Spoons)</label><input type="number" name="leftoverRiceSpoons" value={auditForm.leftoverRiceSpoons} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all" /></div>
+                        <div><label className="block text-sm font-medium text-gray-700 mb-2">Swallow Leftover (Wraps)</label><input type="number" name="leftoverSwallowWraps" value={auditForm.leftoverSwallowWraps} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all" /></div>
                       </div>
                     </div>
                     
@@ -625,7 +662,6 @@ export default function App() {
             <div className="max-w-6xl mx-auto animate-in fade-in duration-300">
               <div className="mb-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Finance & Credits</h1><p className="text-sm md:text-base text-gray-500">Manage bi-weekly corporate tickets and interactive customer tabs.</p></div>
               
-              {/* --- CORPORATE TICKETS WIDGET --- */}
               <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm overflow-hidden mb-8">
                 <div className="bg-[#f8f9fa] border-b border-gray-100 p-4 md:p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div className="flex items-center gap-3">
@@ -880,7 +916,15 @@ export default function App() {
                     }}>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Target Friday (Week 1)</label>
-                        <input type="date" required className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E]" onChange={(e) => { if (e.target.value && new Date(e.target.value).getDay() !== 5) { alert("Please select a Friday."); e.target.value = ""; } }} />
+                        <input type="date" required value={targetFriday} onChange={(e) => {
+                          const val = e.target.value;
+                          if (val && new Date(val).getDay() !== 5) {
+                            alert("Please select a Friday.");
+                            setTargetFriday("");
+                          } else {
+                            setTargetFriday(val);
+                          }
+                        }} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E]" />
                       </div>
                       
                       <div className="mt-4">
@@ -921,7 +965,7 @@ export default function App() {
                     
                     <div className="flex flex-col sm:flex-row gap-3">
                       <button onClick={() => setShowDraft(false)} className="w-full sm:flex-1 bg-white border border-gray-300 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-50 transition-colors">Discard</button>
-                      <button onClick={() => { alert("Schedule Authorized! Locked into database."); setShowDraft(false); document.querySelectorAll('.volunteer-cb').forEach(cb => cb.checked = false); }} className="w-full sm:flex-1 bg-[#1A4D2E] hover:bg-[#11331F] text-white py-3 rounded-xl font-bold shadow-md transition-colors flex items-center justify-center gap-2">
+                      <button onClick={handleLockSchedule} className="w-full sm:flex-1 bg-[#1A4D2E] hover:bg-[#11331F] text-white py-3 rounded-xl font-bold shadow-md transition-colors flex items-center justify-center gap-2">
                         <ShieldCheck size={18} /> Lock & Authorize
                       </button>
                     </div>
@@ -931,7 +975,7 @@ export default function App() {
                 <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 flex flex-col h-full">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 border-b border-gray-100 pb-3">
                     <h3 className="text-base md:text-lg font-bold text-gray-900">End-of-Day Check-In</h3>
-                    <input type="date" defaultValue={new Date().toISOString().split('T')[0]} className="text-sm border border-gray-200 rounded-lg px-3 py-2 w-full sm:w-auto" />
+                    <input type="date" value={attendanceDate} onChange={(e) => setAttendanceDate(e.target.value)} className="text-sm border border-gray-200 rounded-lg px-3 py-2 w-full sm:w-auto" />
                   </div>
                   <p className="text-sm text-gray-500 mb-4">Log actual attendance to calculate today's active payroll.</p>
                   
@@ -940,8 +984,8 @@ export default function App() {
                        <div key={s.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 bg-gray-50 rounded-xl border border-gray-100 gap-3">
                         <div><p className="font-bold text-gray-900 text-sm md:text-base">{s.name}</p><p className="text-xs text-gray-500">Rate: {money(s.rate)}</p></div>
                         <div className="flex w-full sm:w-auto gap-1 md:gap-2 bg-white p-1 rounded-lg border border-gray-200">
-                          <button className="flex-1 sm:flex-none px-2 md:px-3 py-1.5 md:py-1 text-[10px] md:text-xs font-bold rounded-md bg-green-100 text-green-800">PRESENT</button>
-                          <button className="flex-1 sm:flex-none px-2 md:px-3 py-1.5 md:py-1 text-[10px] md:text-xs font-bold rounded-md text-gray-500 hover:bg-gray-100">ABSENT</button>
+                          <button onClick={() => setAttendanceMap({...attendanceMap, [s.id]: 'PRESENT'})} className={`flex-1 sm:flex-none px-2 md:px-3 py-1.5 md:py-1 text-[10px] md:text-xs font-bold rounded-md ${attendanceMap[s.id] === 'PRESENT' ? 'bg-green-100 text-green-800' : 'text-gray-500 hover:bg-gray-100'}`}>PRESENT</button>
+                          <button onClick={() => setAttendanceMap({...attendanceMap, [s.id]: 'ABSENT'})} className={`flex-1 sm:flex-none px-2 md:px-3 py-1.5 md:py-1 text-[10px] md:text-xs font-bold rounded-md ${attendanceMap[s.id] === 'ABSENT' ? 'bg-red-100 text-red-800' : 'text-gray-500 hover:bg-gray-100'}`}>ABSENT</button>
                         </div>
                       </div>
                     ))}
@@ -952,7 +996,7 @@ export default function App() {
                       <span className="text-gray-500 font-medium text-xs md:text-sm">Expected Payroll Today:</span>
                       <span className="text-xl md:text-2xl font-bold text-[#1A4D2E]">{money(dailyPayroll)}</span> 
                     </div>
-                    <button className="w-full bg-blue-50 text-blue-700 hover:bg-blue-100 py-3 md:py-4 rounded-xl font-bold transition-colors text-sm md:text-base">
+                    <button onClick={handleLockAttendance} className="w-full bg-blue-50 text-blue-700 hover:bg-blue-100 py-3 md:py-4 rounded-xl font-bold transition-colors text-sm md:text-base">
                       Lock Attendance & Inject Payroll
                     </button>
                   </div>
@@ -971,8 +1015,6 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
-                
-                {/* COLUMN 1 */}
                 <div className="space-y-6 md:space-y-8">
                   {/* BRANCH SETUP WIDGET */}
                   <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6">
@@ -1021,7 +1063,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* COLUMN 2 */}
                 <div>
                   {/* ACTIVE STAFF ROSTER WIDGET */}
                   <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full flex flex-col">
