@@ -68,12 +68,14 @@ export default function App() {
   const [branches, setBranches] = useState([]);
   const [newBranch, setNewBranch] = useState({ name: '', location: '' });
   const [securityForm, setSecurityForm] = useState({ newUsername: '', newPassword: '' });
+  const [newStaff, setNewStaff] = useState({ name: '', rate: '' });
 
   // --- HR & SCHEDULING STATE ---
   const [showDraft, setShowDraft] = useState(false);
   const [draftPreview, setDraftPreview] = useState({ week1: [], week2: [] });
   const [staffRoster, setStaffRoster] = useState([]);
   const dailyPayroll = staffRoster.filter(s => s.status === 'Active').reduce((sum, s) => sum + s.rate, 0);
+  
 
   // --- PROCUREMENT STATE ---
   const [procurementForm, setProcurementForm] = useState({ item: '', quantity: '', unit: 'Bags', cost: '', method: 'CASH' });
@@ -120,6 +122,11 @@ export default function App() {
           setRecentPurchases(rawPurchases.map(p => ({
             id: p.id, item: p.item_name, qty: p.quantity, unit: p.unit_type, cost: p.total_cost, method: p.payment_method
           })));
+        }
+
+        const staffRes = await fetch(`${API_BASE}/staff`);
+        if (staffRes.ok) {
+           setStaffRoster(await staffRes.json());
         }
       } catch (error) {
         console.error("Backend connection active but data pull failed:", error);
@@ -266,6 +273,31 @@ export default function App() {
       } catch (err) {
         alert("Failed to archive tickets.");
       }
+    }
+  };
+
+  const handleAddStaff = async (e) => {
+    e.preventDefault();
+    const rateNum = Number(newStaff.rate);
+    
+    try {
+      await fetch(`${API_BASE}/staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newStaff.name, rate: rateNum })
+      });
+      
+      const newEmployee = {
+        id: Date.now(), // Fallback ID until next database refresh
+        name: newStaff.name,
+        rate: rateNum,
+        status: 'Active'
+      };
+      
+      setStaffRoster([...staffRoster, newEmployee]);
+      setNewStaff({ name: '', rate: '' });
+    } catch (err) {
+      alert("Failed to save staff member to database.");
     }
   };
 
@@ -939,7 +971,10 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
+                
+                {/* COLUMN 1 */}
                 <div className="space-y-6 md:space-y-8">
+                  {/* BRANCH SETUP WIDGET */}
                   <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6">
                     <h3 className="text-base md:text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Branch Setup</h3>
                     <form className="flex flex-col sm:flex-row items-end gap-3 md:gap-4" onSubmit={handleBranchSubmit}>
@@ -965,7 +1000,7 @@ export default function App() {
                   </div>
 
                   {/* SECURITY SETTINGS WIDGET */}
-                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full">
+                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6">
                     <div className="flex items-center gap-2 mb-4 border-b border-gray-100 pb-2">
                       <Lock className="text-red-600" size={20} />
                       <h3 className="text-base md:text-lg font-bold text-gray-900">Security Credentials</h3>
@@ -986,12 +1021,39 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* COLUMN 2 */}
                 <div>
-                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full">
-                     <h3 className="text-base md:text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Active Staff Roster</h3>
-                     <p className="text-sm text-gray-500">The application starts clean. Add your active staff members here to populate the HR checks.</p>
+                  {/* ACTIVE STAFF ROSTER WIDGET */}
+                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full flex flex-col">
+                    <div className="mb-4 border-b border-gray-100 pb-2">
+                      <h3 className="text-base md:text-lg font-bold text-gray-900">Active Staff Roster</h3>
+                      <p className="text-sm text-gray-500">The application starts clean. Add your active staff members here to populate the HR checks.</p>
+                    </div>
+
+                    <form className="flex flex-col sm:flex-row items-end gap-3 md:gap-4 mb-6" onSubmit={handleAddStaff}>
+                      <div className="w-full sm:flex-1">
+                        <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Staff Name</label>
+                        <input type="text" required placeholder="e.g. Jane Doe" value={newStaff.name} onChange={(e) => setNewStaff({...newStaff, name: e.target.value.replace(/\b\w/g, c => c.toUpperCase())}) } className="w-full px-3 md:px-4 py-2.5 md:py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm" />
+                      </div>
+                      <div className="w-full sm:w-1/3">
+                        <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Daily Rate (₦)</label>
+                        <input type="number" required placeholder="e.g. 5000" value={newStaff.rate} onChange={(e) => setNewStaff({...newStaff, rate: e.target.value}) } className="w-full px-3 md:px-4 py-2.5 md:py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm" />
+                      </div>
+                      <button type="submit" className="w-full sm:w-auto bg-[#1A4D2E] text-white px-6 py-3 rounded-xl font-bold shadow-sm text-sm">Add</button>
+                    </form>
+
+                    <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[300px]">
+                      {staffRoster.map(s => (
+                        <div key={s.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-100 text-sm">
+                          <span className="font-bold">{s.name}</span>
+                          <span className="text-gray-500 font-medium text-[#1A4D2E]">{money(s.rate)} / day</span>
+                        </div>
+                      ))}
+                      {staffRoster.length === 0 && <p className="text-center text-gray-400 py-4 text-xs">No active staff loaded.</p>}
+                    </div>
                   </div>
                 </div>
+                
               </div>
             </div>
           )}
