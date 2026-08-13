@@ -33,7 +33,7 @@ def startup():
         with get_db() as conn:
             cur = conn.cursor()
             
-            # Hardcoded schema to prevent Render "File Not Found" errors
+            # 1. Build any missing tables
             cur.execute("""
             CREATE TABLE IF NOT EXISTS Branches (
                 id SERIAL PRIMARY KEY, name TEXT NOT NULL, location TEXT NOT NULL, 
@@ -91,13 +91,22 @@ def startup():
             );
             """)
             
+            # 2. FORCE UPGRADE EXISTING TABLES (This fixes the data blackout)
+            cur.execute("""
+            ALTER TABLE Procurement_Ledger ADD COLUMN IF NOT EXISTS expense_type TEXT DEFAULT 'DAILY_OPEX';
+            ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS stew_soup_cost REAL DEFAULT 0.0;
+            ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS calculated_strict_revenue REAL DEFAULT 0.0;
+            ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS carb_revenue REAL DEFAULT 0.0;
+            ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS carb_yield_ratio REAL DEFAULT 0.0;
+            """)
+            
             cur.execute("SELECT id FROM Admin_Users")
             if not cur.fetchone():
                 default_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode('utf-8')
                 cur.execute("INSERT INTO Admin_Users (username, password_hash) VALUES (%s, %s)", ("admin", default_hash))
             
             conn.commit()
-            print("Database tables verified and Gap Analysis updates integrated.")
+            print("Database tables upgraded securely. Data recovered.")
     except Exception as e:
         print(f"CRITICAL DATABASE ERROR: {e}")
 
