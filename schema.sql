@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS Procurement_Ledger (
     quantity REAL NOT NULL,
     unit_type TEXT NOT NULL,
     total_cost REAL NOT NULL,
-    payment_method TEXT NOT NULL, -- 'CASH' or 'TRANSFER'
+    payment_method TEXT NOT NULL,
     date_logged DATE DEFAULT CURRENT_DATE
 );
 
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS Customers (
 CREATE TABLE IF NOT EXISTS Credit_Transactions (
     id SERIAL PRIMARY KEY,
     customer_id INTEGER NOT NULL,
-    transaction_type TEXT NOT NULL, -- 'DEBT' or 'REPAYMENT'
+    transaction_type TEXT NOT NULL,
     amount REAL NOT NULL,
     notes TEXT,
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
