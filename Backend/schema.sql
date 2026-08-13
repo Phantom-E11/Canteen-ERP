@@ -1,6 +1,6 @@
 -- BRANCHES & ADMINISTRATION
 CREATE TABLE IF NOT EXISTS Branches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     location TEXT NOT NULL,
     branch_type TEXT DEFAULT 'Main Hub',
@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS Branches (
 );
 
 CREATE TABLE IF NOT EXISTS Staff (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     full_name TEXT NOT NULL,
     role TEXT NOT NULL,
     daily_rate REAL NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS Staff (
 );
 
 CREATE TABLE IF NOT EXISTS Menu_Catalog (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     item_name TEXT NOT NULL,
     category TEXT NOT NULL,
     unit_price REAL NOT NULL,
@@ -27,49 +27,49 @@ CREATE TABLE IF NOT EXISTS Menu_Catalog (
 
 -- PROCUREMENT & MID-DAY EXPENSES
 CREATE TABLE IF NOT EXISTS Procurement_Ledger (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     item_name TEXT NOT NULL,
     quantity REAL NOT NULL,
     unit_type TEXT NOT NULL,
     total_cost REAL NOT NULL,
-    payment_method TEXT NOT NULL, -- 'CASH' or 'TRANSFER'
-    date_logged DATE DEFAULT (date('now', 'localtime'))
+    payment_method TEXT NOT NULL,
+    date_logged DATE DEFAULT CURRENT_DATE
 );
 
 -- FINANCE: CORPORATE TICKETS
 CREATE TABLE IF NOT EXISTS Corporate_Tickets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     branch_id INTEGER NOT NULL,
     ticket_count INTEGER NOT NULL,
     value_per_ticket REAL NOT NULL,
     total_value REAL NOT NULL,
-    submitted BOOLEAN DEFAULT 0,
-    date_logged DATE DEFAULT (date('now', 'localtime')),
+    submitted BOOLEAN DEFAULT FALSE,
+    date_logged DATE DEFAULT CURRENT_DATE,
     FOREIGN KEY(branch_id) REFERENCES Branches(id)
 );
 
 -- FINANCE: CUSTOMER DEBT TABS
 CREATE TABLE IF NOT EXISTS Customers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     company_name TEXT,
     balance REAL DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS Credit_Transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     customer_id INTEGER NOT NULL,
-    transaction_type TEXT NOT NULL, -- 'DEBT' or 'REPAYMENT'
+    transaction_type TEXT NOT NULL,
     amount REAL NOT NULL,
     notes TEXT,
-    transaction_date DATETIME DEFAULT (datetime('now', 'localtime')),
+    transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(customer_id) REFERENCES Customers(id)
 );
 
 -- EVENING AUDIT & RECONCILIATION
 CREATE TABLE IF NOT EXISTS Evening_Audits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    audit_date DATE DEFAULT (date('now', 'localtime')),
+    id SERIAL PRIMARY KEY,
+    audit_date DATE DEFAULT CURRENT_DATE,
     cash_counted REAL NOT NULL,
     bank_transfers REAL NOT NULL,
     gross_revenue REAL NOT NULL,
