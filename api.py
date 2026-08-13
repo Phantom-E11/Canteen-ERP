@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import sqlite3
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from typing import List, Optional
 from datetime import datetime, timedelta
 import jwt
@@ -22,24 +24,31 @@ app.add_middleware(
 )
 
 def get_db():
-    conn = sqlite3.connect("canteenos.db")
-    conn.row_factory = sqlite3.Row
+    # Pulls the secure Neon connection string directly from Render's environment variables
+    conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
 
 @app.on_event("startup")
 def startup():
-    with open("schema.sql", "r") as f:
-        schema = f.read()
-    with get_db() as conn:
-        conn.executescript(schema)
-        
-        # Auto-create default admin in database if none exists
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS Admin_Users (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT)")
-        cur.execute("SELECT id FROM Admin_Users")
-        if not cur.fetchone():
-            default_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode('utf-8')
-            cur.execute("INSERT INTO Admin_Users (username, password_hash) VALUES (?, ?)", ("admin", default_hash))
+    try:
+        with open("schema.sql", "r") as f:
+            schema = f.read()
+            
+        with get_db() as conn:
+            cur = conn.cursor()
+            # If your schema.sql has SQLite specifics like AUTOINCREMENT, 
+            # you will need to change them to SERIAL for Postgres to accept it.
+            cur.execute(schema)
+            
+            # Auto-create default admin in database if none exists
+            cur.execute("CREATE TABLE IF NOT EXISTS Admin_Users (id SERIAL PRIMARY KEY, username TEXT, password_hash TEXT)")
+            cur.execute("SELECT id FROM Admin_Users")
+            if not cur.fetchone():
+                default_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode('utf-8')
+                cur.execute("INSERT INTO Admin_Users (username, password_hash) VALUES (%s, %s)", ("admin", default_hash))
+            conn.commit()
+    except Exception as e:
+        print(f"Startup schema execution skipped or failed: {e}")
 
 # --- PYDANTIC MODELS ---
 class LoginRequest(BaseModel):
@@ -77,11 +86,15 @@ class AuditItem(BaseModel):
     leftoverRice: int
     leftoverSwallow: int
 
+class StaffCreate(BaseModel):
+    name: str
+    rate: float
+
 # --- 1. AUTHENTICATION & SECURITY ---
 @app.post("/api/login")
 def login(req: LoginRequest):
     with get_db() as conn:
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT username, password_hash FROM Admin_Users LIMIT 1")
         admin = cur.fetchone()
         
@@ -100,55 +113,65 @@ def login(req: LoginRequest):
 def update_credentials(creds: UpdateCredentials):
     new_hash = bcrypt.hashpw(creds.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     with get_db() as conn:
-        conn.execute("UPDATE Admin_Users SET username = ?, password_hash = ?", (creds.new_username, new_hash))
+        cur = conn.cursor()
+        cur.execute("UPDATE Admin_Users SET username = %s, password_hash = %s", (creds.new_username, new_hash))
+        conn.commit()
     return {"status": "success", "message": "Credentials updated successfully."}
 
 # --- 2. PROCUREMENT LEDGER ---
 @app.post("/api/procurement")
 def log_procurement(data: ProcurementItem):
     with get_db() as conn:
-        conn.execute(
-            "INSERT INTO Procurement_Ledger (item_name, quantity, unit_type, total_cost, payment_method) VALUES (?, ?, ?, ?, ?)",
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO Procurement_Ledger (item_name, quantity, unit_type, total_cost, payment_method) VALUES (%s, %s, %s, %s, %s)",
             (data.item, data.quantity, data.unit, data.cost, data.method)
         )
+        conn.commit()
     return {"status": "success"}
 
 @app.get("/api/procurement/today")
 def get_todays_procurement():
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM Procurement_Ledger WHERE date_logged = date('now', 'localtime') ORDER BY id DESC")
-        return [dict(row) for row in cur.fetchall()]
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM Procurement_Ledger WHERE date_logged::date = CURRENT_DATE ORDER BY id DESC")
+        return cur.fetchall()
 
 # --- 3. CORPORATE TICKETS ---
 @app.post("/api/tickets")
 def log_ticket(data: TicketItem):
     total = data.count * data.value
     with get_db() as conn:
-        conn.execute(
-            "INSERT INTO Corporate_Tickets (branch_id, ticket_count, value_per_ticket, total_value) VALUES (?, ?, ?, ?)",
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO Corporate_Tickets (branch_id, ticket_count, value_per_ticket, total_value) VALUES (%s, %s, %s, %s)",
             (data.branchId, data.count, data.value, total)
         )
+        conn.commit()
     return {"status": "success"}
 
 @app.post("/api/tickets/submit/{branch_id}")
 def archive_branch_tickets(branch_id: int):
     with get_db() as conn:
-        conn.execute("UPDATE Corporate_Tickets SET submitted = 1 WHERE branch_id = ? AND submitted = 0", (branch_id,))
+        cur = conn.cursor()
+        cur.execute("UPDATE Corporate_Tickets SET submitted = 1 WHERE branch_id = %s AND submitted = 0", (branch_id,))
+        conn.commit()
     return {"status": "success"}
 
 # --- 4. FINANCE & CUSTOMER DEBT ---
 @app.post("/api/finance/transaction")
 def log_customer_transaction(data: TransactionItem):
     with get_db() as conn:
-        conn.execute(
-            "INSERT INTO Credit_Transactions (customer_id, transaction_type, amount, notes) VALUES (?, ?, ?, ?)", 
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO Credit_Transactions (customer_id, transaction_type, amount, notes) VALUES (%s, %s, %s, %s)", 
             (data.customer_id, data.transaction_type, data.amount, data.notes)
         )
         if data.transaction_type == 'DEBT':
-            conn.execute("UPDATE Customers SET balance = balance + ? WHERE id = ?", (data.amount, data.customer_id))
+            cur.execute("UPDATE Customers SET balance = balance + %s WHERE id = %s", (data.amount, data.customer_id))
         elif data.transaction_type == 'REPAYMENT':
-            conn.execute("UPDATE Customers SET balance = balance - ? WHERE id = ?", (data.amount, data.customer_id))
+            cur.execute("UPDATE Customers SET balance = balance - %s WHERE id = %s", (data.amount, data.customer_id))
+        conn.commit()
     return {"status": "success"}
 
 # --- 5. EVENING AUDIT & RECONCILIATION ---
@@ -160,15 +183,16 @@ def log_evening_audit(data: AuditItem):
     with get_db() as conn:
         cur = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
-        cur.execute("SELECT id FROM Evening_Audits WHERE audit_date = ?", (today,))
+        cur.execute("SELECT id FROM Evening_Audits WHERE audit_date = %s", (today,))
         if cur.fetchone():
             raise HTTPException(status_code=400, detail="Audit already submitted for today.")
 
-        conn.execute("""
+        cur.execute("""
             INSERT INTO Evening_Audits 
             (cash_counted, bank_transfers, gross_revenue, procurement_deductions, payroll_deductions, net_profit, leftover_rice_spoons, leftover_swallow_wraps)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (data.cash, data.transfers, gross, data.midDayCash, data.payroll, net, data.leftoverRice, data.leftoverSwallow))
+        conn.commit()
     return {"status": "success", "net_profit": net}
 
 # --- 6. COMMAND CENTER METRICS ---
@@ -176,23 +200,59 @@ def log_evening_audit(data: AuditItem):
 def get_dashboard_metrics():
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT SUM(gross_revenue), SUM(net_profit), SUM(cash_counted), SUM(bank_transfers) FROM Evening_Audits WHERE audit_date = date('now', 'localtime')")
-        audit_row = cur.fetchone()
+        cur.execute("SELECT SUM(gross_revenue), SUM(net_profit), SUM(cash_counted), SUM(bank_transfers) FROM Evening_Audits WHERE audit_date::date = CURRENT_DATE")
+        audit_row = cur.fetchone() or (0, 0, 0, 0)
         
-        cur.execute("SELECT SUM(total_cost) FROM Procurement_Ledger WHERE date_logged = date('now', 'localtime')")
-        proc_row = cur.fetchone()
+        cur.execute("SELECT SUM(total_cost) FROM Procurement_Ledger WHERE date_logged::date = CURRENT_DATE")
+        proc_row = cur.fetchone() or (0,)
         
-        cur.execute("SELECT SUM(amount) FROM Credit_Transactions WHERE transaction_type = 'DEBT' AND date(transaction_date) = date('now', 'localtime')")
-        new_debt = cur.fetchone()[0] or 0
+        cur.execute("SELECT SUM(amount) FROM Credit_Transactions WHERE transaction_type = 'DEBT' AND transaction_date::date = CURRENT_DATE")
+        new_debt_row = cur.fetchone()
+        new_debt = new_debt_row[0] if new_debt_row and new_debt_row[0] is not None else 0
         
-        cur.execute("SELECT SUM(amount) FROM Credit_Transactions WHERE transaction_type = 'REPAYMENT' AND date(transaction_date) = date('now', 'localtime')")
-        rec_debt = cur.fetchone()[0] or 0
+        cur.execute("SELECT SUM(amount) FROM Credit_Transactions WHERE transaction_type = 'REPAYMENT' AND transaction_date::date = CURRENT_DATE")
+        rec_debt_row = cur.fetchone()
+        rec_debt = rec_debt_row[0] if rec_debt_row and rec_debt_row[0] is not None else 0
         
         return {
-            "gross_revenue": audit_row[0] or 0,
-            "net_profit": audit_row[1] or 0,
-            "cash_and_transfers": (audit_row[2] or 0) + (audit_row[3] or 0),
-            "procurement": proc_row[0] or 0,
+            "gross_revenue": audit_row[0] if audit_row[0] is not None else 0,
+            "net_profit": audit_row[1] if audit_row[1] is not None else 0,
+            "cash_and_transfers": ((audit_row[2] or 0) + (audit_row[3] or 0)),
+            "procurement": proc_row[0] if proc_row[0] is not None else 0,
             "new_debt": new_debt,
             "recovered_debt": rec_debt
         }
+
+@app.post("/api/staff")
+async def add_staff(staff: StaffCreate):
+    with get_db() as conn:
+        cur = conn.cursor()
+        
+        # Creates the staff table if it doesn't already exist
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS staff (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                rate REAL NOT NULL,
+                status TEXT NOT NULL
+            )
+        ''')
+        
+        cur.execute('''
+            INSERT INTO staff (name, rate, status)
+            VALUES (%s, %s, 'Active')
+        ''', (staff.name, staff.rate))
+        
+        conn.commit()
+    return {"message": "Staff added successfully"}
+
+@app.get("/api/staff")
+async def get_staff():
+    try:
+        with get_db() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT * FROM staff WHERE status = 'Active'")
+            return cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        # Returns empty list if table doesn't exist yet
+        return []
