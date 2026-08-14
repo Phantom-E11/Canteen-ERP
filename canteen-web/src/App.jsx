@@ -44,6 +44,7 @@ export default function App() {
   const [metrics, setMetrics] = useState({ gross_revenue: 0, cash_and_transfers: 0, net_profit: 0, procurement: 0, new_debt: 0, recovered_debt: 0, is_audit_locked: false });
   const [chartData, setChartData] = useState([]);
   const [historicalData, setHistoricalData] = useState([]);
+  const [systemAlerts, setSystemAlerts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
   // --- ADMINISTRATION & SECURITY STATE ---
@@ -112,7 +113,7 @@ export default function App() {
     if (!isAuthenticated) return;
     const loadData = async () => {
       try {
-        const [dashRes, procRes, staffRes, branchRes, custRes, tickRes, menuRes, histRes, schedRes] = await Promise.all([
+        const [dashRes, procRes, staffRes, branchRes, custRes, tickRes, menuRes, histRes, schedRes, alertRes] = await Promise.all([
           fetch(`${API_BASE}/dashboard`),
           fetch(`${API_BASE}/procurement/today`),
           fetch(`${API_BASE}/staff`),
@@ -121,7 +122,8 @@ export default function App() {
           fetch(`${API_BASE}/tickets`),
           fetch(`${API_BASE}/menu`),
           fetch(`${API_BASE}/reports/historical`),
-          fetch(`${API_BASE}/schedule`)
+          fetch(`${API_BASE}/schedule`),
+          fetch(`${API_BASE}/alerts`)
         ]);
 
         if (dashRes.ok) {
@@ -151,6 +153,7 @@ export default function App() {
         if (menuRes.ok) setMenuCatalog(await menuRes.json());
         if (histRes.ok) setHistoricalData(await histRes.json());
         if (schedRes.ok) setUpcomingSchedule(await schedRes.json());
+        if (alertRes.ok) setSystemAlerts(await alertRes.json());
         
       } catch (error) {
         console.error("Backend connection active but data pull failed:", error);
@@ -166,7 +169,13 @@ export default function App() {
     localStorage.removeItem('canteen_token');
     setIsAuthenticated(false);
   };
-  const handleNotifications = () => alert("You have 0 new system alerts.");
+  const handleNotifications = () => {
+    if (systemAlerts.length > 0) {
+      alert(`You have ${systemAlerts.length} system alerts. Check the Operational Alerts widget on the Command Center.`);
+    } else {
+      alert("You have 0 new system alerts.");
+    }
+  };
   
   const handleTabChange = (tabName) => {
     setActiveTab(tabName);
@@ -264,6 +273,7 @@ export default function App() {
       if (res.ok) {
         alert(`Audit Locked!\nNet Profit: ${money(auditNet)}\nSystem records updated.`);
         setMetrics({...metrics, is_audit_locked: true});
+        window.location.reload();
       } else {
         alert("Audit already submitted for today.");
       }
@@ -358,7 +368,7 @@ export default function App() {
       alert("Schedule Authorized! Locked into database.");
       setShowDraft(false);
       document.querySelectorAll('.volunteer-cb').forEach(cb => cb.checked = false);
-      window.location.reload(); // Reload to fetch the new schedule
+      window.location.reload(); 
     } catch (e) { alert("Database error. Failed to lock schedule."); }
   };
 
@@ -370,6 +380,7 @@ export default function App() {
         body: JSON.stringify({ date: attendanceDate, records })
       });
       alert(`Attendance locked for ${attendanceDate}! Payroll calculated.`);
+      window.location.reload();
     } catch(e) { alert("Failed to inject attendance into database."); }
   };
 
@@ -463,7 +474,12 @@ export default function App() {
             <div className="md:hidden ml-auto"><Search size={20} className="text-gray-400" /></div>
           </div>
           <div className="flex items-center gap-4 ml-4">
-            <button onClick={handleNotifications} className="relative text-gray-400 hover:text-gray-600"><Bell size={22} /><span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span></button>
+            <button onClick={handleNotifications} className="relative text-gray-400 hover:text-gray-600">
+              <Bell size={22} />
+              {systemAlerts.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white flex items-center justify-center text-[9px] font-bold rounded-full border-2 border-white">{systemAlerts.length}</span>
+              )}
+            </button>
             <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-[#1A4D2E] border-2 border-white shadow-sm flex items-center justify-center font-bold text-white text-xs md:text-sm cursor-pointer">AD</div>
           </div>
         </header>
@@ -548,9 +564,8 @@ export default function App() {
                  </div>
               </div>
               
-              {/* UPDATED BOTTOM ROW: Staff Leave & Predictive Roster */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
+                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-56">
                   <div className="flex items-center gap-2 mb-3 border-b border-gray-50 pb-2">
                     <UserMinus className="text-orange-500" size={18} />
                     <h3 className="text-sm font-bold text-gray-900">Absent Today</h3>
@@ -565,7 +580,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
+                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-56">
                   <div className="flex items-center gap-2 mb-3 border-b border-gray-50 pb-2">
                     <Calendar className="text-blue-500" size={18} />
                     <h3 className="text-sm font-bold text-gray-900">Upcoming Off-Days</h3>
@@ -584,10 +599,32 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-50 pb-2">Operational Alerts</h3>
+                {/* DYNAMIC ALERT WIDGET */}
+                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-56">
+                  <div className="flex justify-between items-center mb-3 border-b border-gray-50 pb-2">
+                     <h3 className="text-sm font-bold text-gray-900">Operational Alerts</h3>
+                     {systemAlerts.length > 0 && <span className="bg-red-100 text-red-800 text-[10px] font-bold px-2 py-0.5 rounded-full">{systemAlerts.length} Active</span>}
+                  </div>
                   <div className="flex flex-col flex-1 space-y-2 overflow-y-auto pr-1">
-                     <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">No pending alerts.</p>
+                     {systemAlerts.length === 0 ? (
+                       <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">No pending alerts.</p>
+                     ) : (
+                       systemAlerts.map((alert, i) => (
+                         <div key={i} className={`p-2.5 rounded-lg border flex gap-2 items-start ${
+                           alert.type === 'critical' ? 'bg-red-50 border-red-100 text-red-800' : 
+                           alert.type === 'warning' ? 'bg-orange-50 border-orange-100 text-orange-800' : 
+                           'bg-blue-50 border-blue-100 text-blue-800'
+                         }`}>
+                           <div className="mt-0.5 flex-shrink-0">
+                             {alert.type === 'critical' ? <ShieldCheck size={14} className="text-red-500"/> : <Bell size={14}/>}
+                           </div>
+                           <div>
+                             <p className="text-[9px] font-black uppercase tracking-wider opacity-70 mb-0.5">{alert.category}</p>
+                             <p className="text-xs font-medium leading-tight">{alert.message}</p>
+                           </div>
+                         </div>
+                       ))
+                     )}
                   </div>
                 </div>
               </div>

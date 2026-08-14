@@ -33,7 +33,6 @@ def startup():
         with get_db() as conn:
             cur = conn.cursor()
             
-            # 1. Build any missing tables
             cur.execute("""
             CREATE TABLE IF NOT EXISTS Branches (
                 id SERIAL PRIMARY KEY, name TEXT NOT NULL, location TEXT NOT NULL, 
@@ -91,7 +90,6 @@ def startup():
             );
             """)
             
-            # 2. FORCE UPGRADE EXISTING TABLES (This fixes the data blackout)
             cur.execute("""
             ALTER TABLE Procurement_Ledger ADD COLUMN IF NOT EXISTS expense_type TEXT DEFAULT 'DAILY_OPEX';
             ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS stew_soup_cost REAL DEFAULT 0.0;
@@ -106,7 +104,6 @@ def startup():
                 cur.execute("INSERT INTO Admin_Users (username, password_hash) VALUES (%s, %s)", ("admin", default_hash))
             
             conn.commit()
-            print("Database tables upgraded securely. Data recovered.")
     except Exception as e:
         print(f"CRITICAL DATABASE ERROR: {e}")
 
@@ -507,3 +504,43 @@ def get_historical_reports():
             ORDER BY audit_date ASC LIMIT 30
         """)
         return cur.fetchall()
+
+# --- ACTIVE ALERT ENGINE ---
+@app.get("/api/alerts")
+def get_active_alerts():
+    alerts = []
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 1. High OpEx Check
+        cur.execute("SELECT SUM(total_cost) FROM Procurement_Ledger WHERE date_logged = CURRENT_DATE AND expense_type = 'DAILY_OPEX'")
+        mid_day_cash = cur.fetchone()['sum'] or 0
+        if mid_day_cash > 50000:
+            alerts.append({"type": "warning", "category": "Procurement", "message": f"Mid-Day OpEx Accumulator is high: ₦{mid_day_cash:,.2f}."})
+            
+        # 2. Unsubmitted Tickets Check
+        cur.execute("""
+            SELECT b.name, SUM(t.total_value) as total 
+            FROM Corporate_Tickets t JOIN Branches b ON t.branch_id = b.id 
+            WHERE t.submitted = FALSE GROUP BY b.name HAVING SUM(t.total_value) > 20000
+        """)
+        for row in cur.fetchall():
+            alerts.append({"type": "info", "category": "Finance", "message": f"Action Required: {row['name']} has ₦{row['total']:,.2f} in unsubmitted tickets."})
+            
+        # 3. High Customer Debt Check
+        cur.execute("SELECT name, balance FROM Customers WHERE balance > 15000")
+        for row in cur.fetchall():
+            alerts.append({"type": "critical", "category": "Credit", "message": f"Credit Alert: {row['name']} has crossed ₦15,000 in active debt."})
+            
+        # 4. Missing Audit Check
+        cur.execute("SELECT id FROM Evening_Audits WHERE audit_date = CURRENT_DATE")
+        if not cur.fetchone():
+            alerts.append({"type": "warning", "category": "Audit", "message": "Today's Evening Audit Reconciliation has not been locked."})
+            
+        # 5. Staff Absent Check
+        cur.execute("SELECT COUNT(*) FROM Attendance_Log WHERE log_date = CURRENT_DATE AND status = 'ABSENT'")
+        absent_count = cur.fetchone()['count'] or 0
+        if absent_count > 0:
+            alerts.append({"type": "critical", "category": "HR", "message": f"Warning: {absent_count} staff member(s) marked ABSENT today."})
+
+    return alerts
