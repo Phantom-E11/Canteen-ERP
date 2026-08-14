@@ -400,6 +400,18 @@ def lock_schedule(data: ScheduleLock):
         conn.commit()
     return {"status": "success"}
 
+@app.get("/api/schedule")
+def get_schedule():
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT TO_CHAR(target_date, 'Mon DD') as date, week_num, staff_name 
+            FROM Friday_Schedules 
+            WHERE target_date >= CURRENT_DATE 
+            ORDER BY target_date ASC, week_num ASC
+        """)
+        return cur.fetchall()
+
 @app.post("/api/attendance")
 def log_attendance(data: AttendancePayload):
     with get_db() as conn:

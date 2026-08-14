@@ -61,6 +61,7 @@ export default function App() {
   const [draftPreview, setDraftPreview] = useState({ week1: [], week2: [] });
   const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
   const [attendanceMap, setAttendanceMap] = useState({});
+  const [upcomingSchedule, setUpcomingSchedule] = useState([]);
   
   const markedPresent = Object.values(attendanceMap).filter(v => v === 'PRESENT').length;
   const dailyPayroll = markedPresent > 0 
@@ -111,14 +112,24 @@ export default function App() {
     if (!isAuthenticated) return;
     const loadData = async () => {
       try {
-        const dashRes = await fetch(`${API_BASE}/dashboard`);
+        const [dashRes, procRes, staffRes, branchRes, custRes, tickRes, menuRes, histRes, schedRes] = await Promise.all([
+          fetch(`${API_BASE}/dashboard`),
+          fetch(`${API_BASE}/procurement/today`),
+          fetch(`${API_BASE}/staff`),
+          fetch(`${API_BASE}/branches`),
+          fetch(`${API_BASE}/customers`),
+          fetch(`${API_BASE}/tickets`),
+          fetch(`${API_BASE}/menu`),
+          fetch(`${API_BASE}/reports/historical`),
+          fetch(`${API_BASE}/schedule`)
+        ]);
+
         if (dashRes.ok) {
            const dashData = await dashRes.json();
            setMetrics(dashData);
            setChartData(dashData.chart_data || []);
         }
 
-        const procRes = await fetch(`${API_BASE}/procurement/today`);
         if (procRes.ok) {
           const rawPurchases = await procRes.json();
           setRecentPurchases(rawPurchases.map(p => ({
@@ -126,7 +137,6 @@ export default function App() {
           })));
         }
 
-        const staffRes = await fetch(`${API_BASE}/staff`);
         if (staffRes.ok) {
            const staffData = await staffRes.json();
            setStaffRoster(staffData);
@@ -135,20 +145,12 @@ export default function App() {
            setAttendanceMap(initialAttendance);
         }
 
-        const branchRes = await fetch(`${API_BASE}/branches`);
         if (branchRes.ok) setBranches(await branchRes.json());
-
-        const custRes = await fetch(`${API_BASE}/customers`);
         if (custRes.ok) setCustomers(await custRes.json());
-
-        const tickRes = await fetch(`${API_BASE}/tickets`);
         if (tickRes.ok) setTicketsLedger(await tickRes.json());
-
-        const menuRes = await fetch(`${API_BASE}/menu`);
         if (menuRes.ok) setMenuCatalog(await menuRes.json());
-
-        const histRes = await fetch(`${API_BASE}/reports/historical`);
         if (histRes.ok) setHistoricalData(await histRes.json());
+        if (schedRes.ok) setUpcomingSchedule(await schedRes.json());
         
       } catch (error) {
         console.error("Backend connection active but data pull failed:", error);
@@ -356,6 +358,7 @@ export default function App() {
       alert("Schedule Authorized! Locked into database.");
       setShowDraft(false);
       document.querySelectorAll('.volunteer-cb').forEach(cb => cb.checked = false);
+      window.location.reload(); // Reload to fetch the new schedule
     } catch (e) { alert("Database error. Failed to lock schedule."); }
   };
 
@@ -545,15 +548,16 @@ export default function App() {
                  </div>
               </div>
               
+              {/* UPDATED BOTTOM ROW: Staff Leave & Predictive Roster */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
                   <div className="flex items-center gap-2 mb-3 border-b border-gray-50 pb-2">
                     <UserMinus className="text-orange-500" size={18} />
-                    <h3 className="text-sm font-bold text-gray-900">Staff on Leave</h3>
+                    <h3 className="text-sm font-bold text-gray-900">Absent Today</h3>
                   </div>
                   <div className="space-y-2 overflow-y-auto flex-1 pr-1">
                     {staffRoster.filter(s => attendanceMap[s.id] === 'ABSENT').map(s => (
-                      <div key={s.id} className="text-xs text-gray-600 p-2 bg-gray-50 rounded-md border border-gray-100">{s.name} - Marked Absent</div>
+                      <div key={s.id} className="text-xs text-red-600 p-2 bg-red-50 rounded-md border border-red-100 font-medium">{s.name} - Marked Absent</div>
                     ))}
                     {staffRoster.filter(s => attendanceMap[s.id] === 'ABSENT').length === 0 && (
                       <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">All active staff present today.</p>
@@ -561,7 +565,26 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="col-span-1 md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
+                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
+                  <div className="flex items-center gap-2 mb-3 border-b border-gray-50 pb-2">
+                    <Calendar className="text-blue-500" size={18} />
+                    <h3 className="text-sm font-bold text-gray-900">Upcoming Off-Days</h3>
+                  </div>
+                  <div className="space-y-2 overflow-y-auto flex-1 pr-1">
+                    {upcomingSchedule.length === 0 ? (
+                      <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">No upcoming rosters locked.</p>
+                    ) : (
+                      upcomingSchedule.map((s, i) => (
+                        <div key={i} className="text-xs text-gray-800 p-2 bg-blue-50 rounded-md border border-blue-100 flex justify-between items-center">
+                           <span className="font-bold">{s.staff_name}</span>
+                           <span className="text-blue-700 font-medium">{s.date} (Wk {s.week_num})</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-48">
                   <h3 className="text-sm font-bold text-gray-900 mb-3 border-b border-gray-50 pb-2">Operational Alerts</h3>
                   <div className="flex flex-col flex-1 space-y-2 overflow-y-auto pr-1">
                      <p className="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-xl">No pending alerts.</p>
@@ -576,7 +599,7 @@ export default function App() {
             <div className="max-w-6xl mx-auto animate-in fade-in duration-300">
               <div className="mb-6">
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Evening Audit Reconciliation</h1>
-                <p className="text-sm md:text-base text-gray-500">System automatically calculates Net Profit and Reverse Carb Math by pulling active payroll, mid-day expenses, and menu lines.</p>
+                <p className="text-sm md:text-base text-gray-500">System automatically calculates Net Profit by pulling active payroll and mid-day expenses.</p>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
@@ -586,7 +609,7 @@ export default function App() {
                   ) : (
                     <form onSubmit={handleAuditSubmit} className="space-y-8">
                       <div>
-                        <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 1: Cash Operations</h3>
+                        <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 1: Financial Input</h3>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
                           <div>
                             <label className="block text-sm font-bold text-gray-700 mb-2">Total Cash (₦)</label>
@@ -597,7 +620,7 @@ export default function App() {
                             <input type="number" name="transfers" value={auditForm.transfers} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
                           </div>
                           <div>
-                            <label className="block text-sm font-bold text-orange-600 mb-2">Stew/Soup Cash Exp (₦)</label>
+                            <label className="block text-sm font-bold text-orange-600 mb-2">Stew/Soup Cash (₦)</label>
                             <input type="number" name="stewSoupCost" value={auditForm.stewSoupCost} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-orange-200 bg-orange-50 focus:ring-2 focus:border-orange-500 transition-all text-base md:text-lg" />
                           </div>
                         </div>
@@ -606,13 +629,13 @@ export default function App() {
                       <div>
                         <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 2: Strict Menu Sold (Proteins/Packaged)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {menuCatalog.filter(m => m.category === 'Strict').map(m => (
+                          {menuCatalog.filter(m => m.category === 'Strict' || m.category === 'Swallow').map(m => (
                             <div key={m.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-200 shadow-sm">
                               <span className="text-sm font-bold text-gray-700">{m.item_name} <span className="text-gray-400 font-normal">(@{money(m.unit_price)})</span></span>
                               <input type="number" placeholder="Qty Sold" onChange={e => setLineItems({...lineItems, [m.id]: e.target.value})} className="w-24 p-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:border-[#1A4D2E]"/>
                             </div>
                           ))}
-                          {menuCatalog.filter(m => m.category === 'Strict').length === 0 && <p className="col-span-2 text-sm text-gray-400 italic">No strict items configured in menu.</p>}
+                          {menuCatalog.filter(m => m.category === 'Strict' || m.category === 'Swallow').length === 0 && <p className="col-span-2 text-sm text-gray-400 italic">No strict items configured in menu.</p>}
                         </div>
                       </div>
 
@@ -682,7 +705,7 @@ export default function App() {
             <div className="max-w-6xl mx-auto animate-in fade-in duration-300">
               <div className="mb-6"><h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Procurement Ledger</h1><p className="text-sm md:text-base text-gray-500">Log market expenses to ensure accurate Daily Profit & Loss.</p></div>
               <div className="mb-6 md:mb-8 bg-blue-50 border border-blue-200 rounded-[24px] p-5 md:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between shadow-sm gap-4">
-                <div><h3 className="text-xs md:text-sm font-bold text-blue-800 uppercase tracking-wider mb-1">Mid-Day Cash Expense Accumulator</h3><p className="text-xs text-blue-600">Total physical cash spent today before Evening Audit (Excludes Bulk Assets).</p></div>
+                <div><h3 className="text-xs md:text-sm font-bold text-blue-800 uppercase tracking-wider mb-1">Mid-Day Cash Expense Accumulator</h3><p className="text-xs text-blue-600">Total physical cash spent today before Evening Audit.</p></div>
                 <div className="text-2xl md:text-3xl font-bold text-blue-900">{money(midDayCashAccumulator)}</div>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
@@ -1144,7 +1167,7 @@ export default function App() {
                     <form onSubmit={handleMenuSubmit} className="flex flex-col sm:flex-row items-end gap-3 md:gap-4 mb-4">
                       <div className="w-full sm:flex-1"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Item Name</label><input type="text" required value={newMenu.item_name} onChange={e=>setNewMenu({...newMenu, item_name:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm"/></div>
                       <div className="w-full sm:w-24"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Price (₦)</label><input type="number" required value={newMenu.unit_price} onChange={e=>setNewMenu({...newMenu, unit_price:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm"/></div>
-                      <div className="w-full sm:w-auto"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Type</label><select value={newMenu.category} onChange={e=>setNewMenu({...newMenu, category:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm focus:ring-2 focus:border-[#1A4D2E]"><option value="Strict">Strict (Proteins)</option><option value="Carb">Loose (Carbs)</option></select></div>
+                      <div className="w-full sm:w-auto"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Type</label><select value={newMenu.category} onChange={e=>setNewMenu({...newMenu, category:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm focus:ring-2 focus:border-[#1A4D2E]"><option value="Strict">Strict (Proteins)</option><option value="Swallow">Swallow (Wraps)</option><option value="Carb">Loose (Carbs)</option></select></div>
                       <button type="submit" className="w-full sm:w-auto bg-[#1A4D2E] text-white px-4 py-2 rounded-xl font-bold shadow-sm">+</button>
                     </form>
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
@@ -1207,7 +1230,7 @@ export default function App() {
 
                 <div>
                   {/* ACTIVE STAFF ROSTER WIDGET */}
-                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full flex flex-col">
+                  <div className="bg-white rounded-[24px] border border-gray-100 shadow-sm p-4 md:p-6 h-full flex flex-col min-h-[500px]">
                     <div className="mb-4 border-b border-gray-100 pb-2">
                       <h3 className="text-base md:text-lg font-bold text-gray-900">Active Staff Roster</h3>
                       <p className="text-sm text-gray-500">Add or deactivate staff members here to calculate active payroll.</p>
