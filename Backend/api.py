@@ -513,15 +513,17 @@ def get_weekly_analytics():
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
+        # 1. Total Bulk Restock (CUSTOM FINANCIAL WEEK: Saturday to Friday)
         cur.execute("""
             SELECT SUM(total_cost) as total_bulk 
             FROM Procurement_Ledger 
             WHERE expense_type = 'BULK_RESTOCK' 
-            AND date_logged >= CURRENT_DATE - INTERVAL '7 days'
+            AND date_logged >= (DATE_TRUNC('week', CURRENT_DATE + INTERVAL '2 days') - INTERVAL '2 days')::DATE
         """)
         bulk_row = cur.fetchone()
         bulk_total = bulk_row['total_bulk'] if bulk_row and bulk_row['total_bulk'] else 0
 
+        # 2. Daily Profit vs Expense Breakdown (CUSTOM FINANCIAL WEEK: Saturday to Friday)
         cur.execute("""
             SELECT 
                 TO_CHAR(a.audit_date, 'Dy') as day,
@@ -530,7 +532,7 @@ def get_weekly_analytics():
                  COALESCE((SELECT SUM(total_cost) FROM Procurement_Ledger p WHERE p.date_logged = a.audit_date AND p.expense_type = 'BULK_RESTOCK'), 0)
                 ) as expenses
             FROM Evening_Audits a
-            WHERE a.audit_date >= CURRENT_DATE - INTERVAL '7 days'
+            WHERE a.audit_date >= (DATE_TRUNC('week', CURRENT_DATE + INTERVAL '2 days') - INTERVAL '2 days')::DATE
             ORDER BY a.audit_date ASC
         """)
         chart_data = cur.fetchall()
@@ -540,6 +542,7 @@ def get_weekly_analytics():
             "comparison_chart": chart_data
         }
 
+    
 # --- ACTIVE ALERT ENGINE ---
 @app.get("/api/alerts")
 def get_active_alerts():
