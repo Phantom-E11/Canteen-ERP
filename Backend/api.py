@@ -70,7 +70,7 @@ def startup():
             CREATE TABLE IF NOT EXISTS Evening_Audits (
                 id SERIAL PRIMARY KEY, audit_date DATE DEFAULT CURRENT_DATE, cash_counted REAL NOT NULL, 
                 bank_transfers REAL NOT NULL, gross_revenue REAL NOT NULL, procurement_deductions REAL NOT NULL, 
-                stew_soup_cost REAL DEFAULT 0.0, payroll_deductions REAL NOT NULL, 
+                stew_soup_cost REAL DEFAULT 0.0, raw_carb_cost REAL DEFAULT 0.0, payroll_deductions REAL NOT NULL, 
                 calculated_strict_revenue REAL DEFAULT 0.0, carb_revenue REAL DEFAULT 0.0, 
                 net_profit REAL NOT NULL, leftover_rice_spoons INTEGER NOT NULL, 
                 leftover_swallow_wraps INTEGER NOT NULL, carb_yield_ratio REAL DEFAULT 0.0
@@ -93,6 +93,7 @@ def startup():
             cur.execute("""
             ALTER TABLE Procurement_Ledger ADD COLUMN IF NOT EXISTS expense_type TEXT DEFAULT 'DAILY_OPEX';
             ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS stew_soup_cost REAL DEFAULT 0.0;
+            ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS raw_carb_cost REAL DEFAULT 0.0;
             ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS calculated_strict_revenue REAL DEFAULT 0.0;
             ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS carb_revenue REAL DEFAULT 0.0;
             ALTER TABLE Evening_Audits ADD COLUMN IF NOT EXISTS carb_yield_ratio REAL DEFAULT 0.0;
@@ -181,6 +182,7 @@ class AuditItem(BaseModel):
     transfers: float
     midDayCash: float
     stewSoupCost: float
+    rawCarbCost: float
     payroll: float
     leftoverRice: int
     leftoverSwallow: int
@@ -426,8 +428,9 @@ def log_evening_audit(data: AuditItem):
     carb_rev = gross - strict_rev
     
     net = gross - data.midDayCash - data.payroll - data.stewSoupCost
-    leftovers = data.leftoverRice + data.leftoverSwallow
-    yield_ratio = carb_rev / leftovers if leftovers > 0 else carb_rev
+    
+    # TRUE FINANCIAL YIELD MATH: Carb Revenue divided by the Raw Capital Cost of Carbs cooked.
+    yield_ratio = (carb_rev / data.rawCarbCost) if data.rawCarbCost > 0 else 0.0
     
     with get_db() as conn:
         cur = conn.cursor()
@@ -437,11 +440,11 @@ def log_evening_audit(data: AuditItem):
 
         cur.execute("""
             INSERT INTO Evening_Audits 
-            (cash_counted, bank_transfers, gross_revenue, procurement_deductions, stew_soup_cost, 
+            (cash_counted, bank_transfers, gross_revenue, procurement_deductions, stew_soup_cost, raw_carb_cost,
              payroll_deductions, calculated_strict_revenue, carb_revenue, net_profit, 
              leftover_rice_spoons, leftover_swallow_wraps, carb_yield_ratio)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-        """, (data.cash, data.transfers, gross, data.midDayCash, data.stewSoupCost, 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (data.cash, data.transfers, gross, data.midDayCash, data.stewSoupCost, data.rawCarbCost,
               data.payroll, strict_rev, carb_rev, net, data.leftoverRice, data.leftoverSwallow, yield_ratio))
         
         audit_id = cur.fetchone()[0]
@@ -505,6 +508,38 @@ def get_historical_reports():
         """)
         return cur.fetchall()
 
+@app.get("/api/reports/weekly")
+def get_weekly_analytics():
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            SELECT SUM(total_cost) as total_bulk 
+            FROM Procurement_Ledger 
+            WHERE expense_type = 'BULK_RESTOCK' 
+            AND date_logged >= CURRENT_DATE - INTERVAL '7 days'
+        """)
+        bulk_row = cur.fetchone()
+        bulk_total = bulk_row['total_bulk'] if bulk_row and bulk_row['total_bulk'] else 0
+
+        cur.execute("""
+            SELECT 
+                TO_CHAR(a.audit_date, 'Dy') as day,
+                a.net_profit as profit,
+                (a.procurement_deductions + a.stew_soup_cost + a.payroll_deductions + 
+                 COALESCE((SELECT SUM(total_cost) FROM Procurement_Ledger p WHERE p.date_logged = a.audit_date AND p.expense_type = 'BULK_RESTOCK'), 0)
+                ) as expenses
+            FROM Evening_Audits a
+            WHERE a.audit_date >= CURRENT_DATE - INTERVAL '7 days'
+            ORDER BY a.audit_date ASC
+        """)
+        chart_data = cur.fetchall()
+
+        return {
+            "total_bulk_weekly": bulk_total,
+            "comparison_chart": chart_data
+        }
+
 # --- ACTIVE ALERT ENGINE ---
 @app.get("/api/alerts")
 def get_active_alerts():
@@ -512,13 +547,11 @@ def get_active_alerts():
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. High OpEx Check
         cur.execute("SELECT SUM(total_cost) FROM Procurement_Ledger WHERE date_logged = CURRENT_DATE AND expense_type = 'DAILY_OPEX'")
         mid_day_cash = cur.fetchone()['sum'] or 0
         if mid_day_cash > 50000:
             alerts.append({"type": "warning", "category": "Procurement", "message": f"Mid-Day OpEx Accumulator is high: ₦{mid_day_cash:,.2f}."})
             
-        # 2. Unsubmitted Tickets Check
         cur.execute("""
             SELECT b.name, SUM(t.total_value) as total 
             FROM Corporate_Tickets t JOIN Branches b ON t.branch_id = b.id 
@@ -527,17 +560,14 @@ def get_active_alerts():
         for row in cur.fetchall():
             alerts.append({"type": "info", "category": "Finance", "message": f"Action Required: {row['name']} has ₦{row['total']:,.2f} in unsubmitted tickets."})
             
-        # 3. High Customer Debt Check
         cur.execute("SELECT name, balance FROM Customers WHERE balance > 15000")
         for row in cur.fetchall():
             alerts.append({"type": "critical", "category": "Credit", "message": f"Credit Alert: {row['name']} has crossed ₦15,000 in active debt."})
             
-        # 4. Missing Audit Check
         cur.execute("SELECT id FROM Evening_Audits WHERE audit_date = CURRENT_DATE")
         if not cur.fetchone():
             alerts.append({"type": "warning", "category": "Audit", "message": "Today's Evening Audit Reconciliation has not been locked."})
             
-        # 5. Staff Absent Check
         cur.execute("SELECT COUNT(*) FROM Attendance_Log WHERE log_date = CURRENT_DATE AND status = 'ABSENT'")
         absent_count = cur.fetchone()['count'] or 0
         if absent_count > 0:

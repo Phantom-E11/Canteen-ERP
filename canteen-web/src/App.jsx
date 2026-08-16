@@ -4,7 +4,7 @@ import {
   LogOut, Bell, Search, Plus, Save, Calendar, UserMinus, 
   ArrowDownRight, ArrowUpRight, Receipt, CheckSquare, Archive, 
   Wallet, Banknote, ChevronDown, ChevronUp, Lock, Menu, X, 
-  ShieldCheck, TrendingUp, TrendingDown, Activity, Trash2
+  ShieldCheck, TrendingUp, Activity, Trash2, RefreshCw 
 } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -44,6 +44,7 @@ export default function App() {
   const [metrics, setMetrics] = useState({ gross_revenue: 0, cash_and_transfers: 0, net_profit: 0, procurement: 0, new_debt: 0, recovered_debt: 0, is_audit_locked: false });
   const [chartData, setChartData] = useState([]);
   const [historicalData, setHistoricalData] = useState([]);
+  const [weeklyAnalytics, setWeeklyAnalytics] = useState({ total_bulk_weekly: 0, comparison_chart: [] });
   const [systemAlerts, setSystemAlerts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -54,7 +55,7 @@ export default function App() {
   const [staffRoster, setStaffRoster] = useState([]);
   const [newStaff, setNewStaff] = useState({ name: '', rate: '' });
   const [menuCatalog, setMenuCatalog] = useState([]);
-  const [newMenu, setNewMenu] = useState({ item_name: '', category: 'Strict', unit_price: '' });
+  const [newMenu, setNewMenu] = useState({ item_name: '', category: 'STRICT_UNIT', unit_price: '' });
 
   // --- HR & SCHEDULING STATE ---
   const [showDraft, setShowDraft] = useState(false);
@@ -77,7 +78,7 @@ export default function App() {
   const midDayCashAccumulator = metrics.is_audit_locked ? 0 : recentPurchases.filter(p => p.method === 'CASH' && p.expense_type === 'DAILY_OPEX').reduce((sum, p) => sum + p.cost, 0);
 
   // --- EVENING AUDIT STATE ---
-  const [auditForm, setAuditForm] = useState({ cash: '', transfers: '', stewSoupCost: '', leftoverRiceSpoons: '', leftoverSwallowWraps: '' });
+  const [auditForm, setAuditForm] = useState({ cash: '', transfers: '', stewSoupCost: '', rawCarbCost: '', leftoverRiceSpoons: '', leftoverSwallowWraps: '' });
   const [lineItems, setLineItems] = useState({});
   
   const auditGross = (Number(auditForm.cash) || 0) + (Number(auditForm.transfers) || 0);
@@ -85,7 +86,9 @@ export default function App() {
     const item = menuCatalog.find(m => m.id === parseInt(id));
     return sum + (item ? item.unit_price * (Number(lineItems[id]) || 0) : 0);
   }, 0);
+  const carbRev = auditGross - strictRev;
   const auditNet = auditGross - midDayCashAccumulator - dailyPayroll - (Number(auditForm.stewSoupCost) || 0);
+  const carbYield = (Number(auditForm.rawCarbCost) > 0) ? (carbRev / Number(auditForm.rawCarbCost)).toFixed(2) : 0;
 
   // --- FINANCE & CREDITS STATE ---
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -109,58 +112,63 @@ export default function App() {
   }, {});
 
   // --- DATABASE NETWORK FETCHING ---
-  useEffect(() => {
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const syncData = async () => {
     if (!isAuthenticated) return;
-    const loadData = async () => {
-      try {
-        const [dashRes, procRes, staffRes, branchRes, custRes, tickRes, menuRes, histRes, schedRes, alertRes] = await Promise.all([
-          fetch(`${API_BASE}/dashboard`),
-          fetch(`${API_BASE}/procurement/today`),
-          fetch(`${API_BASE}/staff`),
-          fetch(`${API_BASE}/branches`),
-          fetch(`${API_BASE}/customers`),
-          fetch(`${API_BASE}/tickets`),
-          fetch(`${API_BASE}/menu`),
-          fetch(`${API_BASE}/reports/historical`),
-          fetch(`${API_BASE}/schedule`),
-          fetch(`${API_BASE}/alerts`)
-        ]);
+    setIsSyncing(true);
+    try {
+      const [dashRes, procRes, staffRes, branchRes, custRes, tickRes, menuRes, histRes, schedRes, alertRes, weeklyRes] = await Promise.all([
+        fetch(`${API_BASE}/dashboard`),
+        fetch(`${API_BASE}/procurement/today`),
+        fetch(`${API_BASE}/staff`),
+        fetch(`${API_BASE}/branches`),
+        fetch(`${API_BASE}/customers`),
+        fetch(`${API_BASE}/tickets`),
+        fetch(`${API_BASE}/menu`),
+        fetch(`${API_BASE}/reports/historical`),
+        fetch(`${API_BASE}/schedule`),
+        fetch(`${API_BASE}/alerts`),
+        fetch(`${API_BASE}/reports/weekly`)
+      ]);
 
-        if (dashRes.ok) {
-           const dashData = await dashRes.json();
-           setMetrics(dashData);
-           setChartData(dashData.chart_data || []);
-        }
-
-        if (procRes.ok) {
-          const rawPurchases = await procRes.json();
-          setRecentPurchases(rawPurchases.map(p => ({
-            id: p.id, item: p.item_name, qty: p.quantity, unit: p.unit_type, cost: p.total_cost, method: p.payment_method, expense_type: p.expense_type
-          })));
-        }
-
-        if (staffRes.ok) {
-           const staffData = await staffRes.json();
-           setStaffRoster(staffData);
-           const initialAttendance = {};
-           staffData.forEach(s => initialAttendance[s.id] = 'PRESENT');
-           setAttendanceMap(initialAttendance);
-        }
-
-        if (branchRes.ok) setBranches(await branchRes.json());
-        if (custRes.ok) setCustomers(await custRes.json());
-        if (tickRes.ok) setTicketsLedger(await tickRes.json());
-        if (menuRes.ok) setMenuCatalog(await menuRes.json());
-        if (histRes.ok) setHistoricalData(await histRes.json());
-        if (schedRes.ok) setUpcomingSchedule(await schedRes.json());
-        if (alertRes.ok) setSystemAlerts(await alertRes.json());
-        
-      } catch (error) {
-        console.error("Backend connection active but data pull failed:", error);
+      if (dashRes.ok) {
+         const dashData = await dashRes.json();
+         setMetrics(dashData);
+         setChartData(dashData.chart_data || []);
       }
-    };
-    loadData();
-  }, [isAuthenticated]);
+      if (procRes.ok) {
+        const rawPurchases = await procRes.json();
+        setRecentPurchases(rawPurchases.map(p => ({
+          id: p.id, item: p.item_name, qty: p.quantity, unit: p.unit_type, cost: p.total_cost, method: p.payment_method, expense_type: p.expense_type
+        })));
+      }
+      if (staffRes.ok) {
+         const staffData = await staffRes.json();
+         setStaffRoster(staffData);
+         const initialAttendance = {};
+         staffData.forEach(s => initialAttendance[s.id] = 'PRESENT');
+         setAttendanceMap(initialAttendance);
+      }
+      if (branchRes.ok) setBranches(await branchRes.json());
+      if (custRes.ok) setCustomers(await custRes.json());
+      if (tickRes.ok) setTicketsLedger(await tickRes.json());
+      if (menuRes.ok) setMenuCatalog(await menuRes.json());
+      if (histRes.ok) setHistoricalData(await histRes.json());
+      if (schedRes.ok) setUpcomingSchedule(await schedRes.json());
+      if (alertRes.ok) setSystemAlerts(await alertRes.json());
+      if (weeklyRes.ok) setWeeklyAnalytics(await weeklyRes.json());
+      
+    } catch (error) {
+      console.error("Backend connection active but data pull failed:", error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    syncData();
+  }, [isAuthenticated, activeTab]);
 
   const money = (val) => `₦${Number(val).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
   
@@ -190,7 +198,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newBranch.name, location: newBranch.location })
       });
-      setBranches([...branches, { id: Date.now(), name: newBranch.name, location: newBranch.location, status: 'Open' }]);
+      syncData();
       setNewBranch({ name: '', location: '' });
     } catch(err) { alert("Failed to save branch."); }
   };
@@ -216,8 +224,8 @@ export default function App() {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({...newMenu, unit_price: Number(newMenu.unit_price)})
       });
-      setMenuCatalog([...menuCatalog, { id: Date.now(), ...newMenu, unit_price: Number(newMenu.unit_price) }]);
-      setNewMenu({ item_name: '', category: 'Strict', unit_price: '' });
+      syncData();
+      setNewMenu({ item_name: '', category: 'STRICT_UNIT', unit_price: '' });
     } catch(err) { alert("Failed to add menu item."); }
   };
 
@@ -225,7 +233,7 @@ export default function App() {
     if(confirm("Deactivate this staff member? They will be removed from the active roster.")) {
       try {
         await fetch(`${API_BASE}/staff/${id}/deactivate`, { method: 'PUT' });
-        setStaffRoster(staffRoster.filter(s => s.id !== id));
+        syncData();
       } catch(err) { alert("Failed to deactivate staff."); }
     }
   };
@@ -241,7 +249,7 @@ export default function App() {
       await fetch(`${API_BASE}/procurement`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
-      setRecentPurchases([{ id: Date.now(), ...payload }, ...recentPurchases]);
+      syncData();
       setProcurementForm({ item: '', quantity: '', unit: 'Bags', cost: '', method: 'CASH', expense_type: 'DAILY_OPEX' });
     } catch (err) { alert("Database error. Could not save purchase."); }
   };
@@ -262,7 +270,8 @@ export default function App() {
     e.preventDefault(); 
     const payload = {
       cash: Number(auditForm.cash), transfers: Number(auditForm.transfers), 
-      midDayCash: midDayCashAccumulator, stewSoupCost: Number(auditForm.stewSoupCost), payroll: dailyPayroll, 
+      midDayCash: midDayCashAccumulator, stewSoupCost: Number(auditForm.stewSoupCost), 
+      rawCarbCost: Number(auditForm.rawCarbCost), payroll: dailyPayroll, 
       leftoverRice: Number(auditForm.leftoverRiceSpoons), leftoverSwallow: Number(auditForm.leftoverSwallowWraps),
       line_items: Object.keys(lineItems).map(id => ({ menu_item_id: Number(id), quantity: Number(lineItems[id]), price: menuCatalog.find(m => m.id == id).unit_price }))
     };
@@ -272,8 +281,7 @@ export default function App() {
       });
       if (res.ok) {
         alert(`Audit Locked!\nNet Profit: ${money(auditNet)}\nSystem records updated.`);
-        setMetrics({...metrics, is_audit_locked: true});
-        window.location.reload();
+        syncData();
       } else {
         alert("Audit already submitted for today.");
       }
@@ -286,7 +294,7 @@ export default function App() {
       await fetch(`${API_BASE}/customers`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCustomerName })
       });
-      setCustomers([...customers, { id: Date.now(), name: newCustomerName, balance: 0, history: [] }]);
+      syncData();
       setNewCustomerName('');
     } catch (err) { alert("Failed to create customer tab."); }
   };
@@ -300,16 +308,8 @@ export default function App() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ customer_id: selectedCustomer.id, transaction_type: type, amount, notes })
         });
-        setCustomers(customers.map(c => {
-          if (c.id === selectedCustomer.id) {
-            const newBal = type === 'DEBT' ? c.balance + amount : c.balance - amount;
-            const newHistory = [{id: Date.now(), date: new Date().toISOString().split('T')[0], notes, amount, type}, ...c.history];
-            const updatedCustomer = { ...c, balance: newBal < 0 ? 0 : newBal, history: newHistory };
-            setSelectedCustomer(updatedCustomer);
-            return updatedCustomer;
-          }
-          return c;
-        }));
+        syncData();
+        setSelectedCustomer(null);
       } catch (err) { alert("Transaction failed to log."); }
     }
   };
@@ -324,12 +324,7 @@ export default function App() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ branchId: branch.id, count: Number(ticketForm.count), value: Number(ticketForm.value) })
       });
-      const newItem = {
-        id: Date.now(), date: new Date().toISOString().split('T')[0], branchId: branch.id, branchName: branch.name,
-        count: Number(ticketForm.count), value: Number(ticketForm.value), total: Number(ticketForm.count) * Number(ticketForm.value),
-        submitted: false
-      };
-      setTicketsLedger([newItem, ...ticketsLedger]);
+      syncData();
       setTicketForm({ ...ticketForm, count: '' });
     } catch (err) { alert("Failed to save ticket."); }
   };
@@ -338,7 +333,7 @@ export default function App() {
     if (confirm(`Mark this bi-weekly cycle as submitted for ${branchName}? This will archive these specific tickets.`)) {
       try {
         await fetch(`${API_BASE}/tickets/submit/${branchId}`, { method: 'POST' });
-        setTicketsLedger(ticketsLedger.map(t => (t.branchId === branchId && !t.submitted) ? { ...t, submitted: true } : t));
+        syncData();
         setExpandedTicketBranch(null); 
       } catch (err) { alert("Failed to archive tickets."); }
     }
@@ -351,10 +346,7 @@ export default function App() {
       await fetch(`${API_BASE}/staff`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newStaff.name, rate: rateNum })
       });
-      
-      const newEmployee = { id: Date.now(), name: newStaff.name, rate: rateNum, status: 'Active' };
-      setStaffRoster([...staffRoster, newEmployee]);
-      setAttendanceMap({...attendanceMap, [newEmployee.id]: 'PRESENT'});
+      syncData();
       setNewStaff({ name: '', rate: '' });
     } catch (err) { alert("Failed to save staff member to database."); }
   };
@@ -368,7 +360,7 @@ export default function App() {
       alert("Schedule Authorized! Locked into database.");
       setShowDraft(false);
       document.querySelectorAll('.volunteer-cb').forEach(cb => cb.checked = false);
-      window.location.reload(); 
+      syncData();
     } catch (e) { alert("Database error. Failed to lock schedule."); }
   };
 
@@ -380,7 +372,7 @@ export default function App() {
         body: JSON.stringify({ date: attendanceDate, records })
       });
       alert(`Attendance locked for ${attendanceDate}! Payroll calculated.`);
-      window.location.reload();
+      syncData();
     } catch(e) { alert("Failed to inject attendance into database."); }
   };
 
@@ -474,6 +466,9 @@ export default function App() {
             <div className="md:hidden ml-auto"><Search size={20} className="text-gray-400" /></div>
           </div>
           <div className="flex items-center gap-4 ml-4">
+            <button onClick={syncData} disabled={isSyncing} className={`text-gray-400 hover:text-[#1A4D2E] transition-colors ${isSyncing ? 'animate-spin text-[#1A4D2E]' : ''}`}>
+              <RefreshCw size={20} />
+            </button>
             <button onClick={handleNotifications} className="relative text-gray-400 hover:text-gray-600">
               <Bell size={22} />
               {systemAlerts.length > 0 && (
@@ -599,7 +594,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* DYNAMIC ALERT WIDGET */}
                 <div className="col-span-1 bg-white rounded-2xl border border-gray-100 shadow-sm p-4 md:p-5 flex flex-col h-56">
                   <div className="flex justify-between items-center mb-3 border-b border-gray-50 pb-2">
                      <h3 className="text-sm font-bold text-gray-900">Operational Alerts</h3>
@@ -647,7 +641,7 @@ export default function App() {
                     <form onSubmit={handleAuditSubmit} className="space-y-8">
                       <div>
                         <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 1: Financial Input</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                           <div>
                             <label className="block text-sm font-bold text-gray-700 mb-2">Total Cash (₦)</label>
                             <input type="number" name="cash" value={auditForm.cash} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] transition-all text-base md:text-lg" />
@@ -660,19 +654,23 @@ export default function App() {
                             <label className="block text-sm font-bold text-orange-600 mb-2">Stew/Soup Cash (₦)</label>
                             <input type="number" name="stewSoupCost" value={auditForm.stewSoupCost} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-orange-200 bg-orange-50 focus:ring-2 focus:border-orange-500 transition-all text-base md:text-lg" />
                           </div>
+                          <div>
+                            <label className="block text-sm font-bold text-orange-600 mb-2">Raw Carb Cost Cooked Today (₦)</label>
+                            <input type="number" name="rawCarbCost" value={auditForm.rawCarbCost} onChange={(e) => setAuditForm({ ...auditForm, [e.target.name]: e.target.value })} required className="w-full px-4 py-3 rounded-xl border border-orange-200 bg-orange-50 focus:ring-2 focus:border-orange-500 transition-all text-base md:text-lg" />
+                          </div>
                         </div>
                       </div>
                       
                       <div>
                         <h3 className="text-lg font-bold text-gray-900 mb-4 border-b border-gray-100 pb-2">Step 2: Strict Menu Sold (Proteins/Packaged)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {menuCatalog.filter(m => m.category === 'Strict' || m.category === 'Swallow').map(m => (
+                          {menuCatalog.filter(m => m.category === 'STRICT_UNIT' || m.category === 'SWALLOW').map(m => (
                             <div key={m.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-xl border border-gray-200 shadow-sm">
                               <span className="text-sm font-bold text-gray-700">{m.item_name} <span className="text-gray-400 font-normal">(@{money(m.unit_price)})</span></span>
                               <input type="number" placeholder="Qty Sold" onChange={e => setLineItems({...lineItems, [m.id]: e.target.value})} className="w-24 p-2 border border-gray-300 rounded-lg text-center focus:ring-2 focus:border-[#1A4D2E]"/>
                             </div>
                           ))}
-                          {menuCatalog.filter(m => m.category === 'Strict' || m.category === 'Swallow').length === 0 && <p className="col-span-2 text-sm text-gray-400 italic">No strict items configured in menu.</p>}
+                          {menuCatalog.filter(m => m.category === 'STRICT_UNIT' || m.category === 'SWALLOW').length === 0 && <p className="col-span-2 text-sm text-gray-400 italic">No strict items configured in menu.</p>}
                         </div>
                       </div>
 
@@ -710,8 +708,11 @@ export default function App() {
                       <div className="pt-2 flex justify-between items-center text-sm font-bold text-blue-600">
                         <span>Strict Revenue (Auto):</span><span>- {money(strictRev)}</span>
                       </div>
-                      <div className="flex justify-between items-center text-sm font-bold text-purple-600 border-b border-gray-200 pb-4">
-                        <span>Carb Revenue (Yield):</span><span>{money(auditGross - strictRev)}</span>
+                      <div className="flex justify-between items-center text-sm font-bold text-purple-600">
+                        <span>Carb Revenue:</span><span>{money(carbRev)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 uppercase tracking-wider border-b border-gray-200 pb-4">
+                        <span>Raw Cost: {money(auditForm.rawCarbCost || 0)}</span><span>Yield Mult: {carbYield}x</span>
                       </div>
 
                       <div className="pt-2 flex justify-between items-center text-sm font-medium text-red-500">
@@ -1171,19 +1172,42 @@ export default function App() {
           {/* VIEW: ANALYTICS & REPORTS */}
           {activeTab === 'Analytics & Reports' && (
             <div className="max-w-6xl mx-auto animate-in fade-in duration-300 space-y-6">
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Historical Analytics</h1>
-              <div className="bg-white border border-gray-100 p-6 rounded-[24px] shadow-sm h-[500px]">
-                <h3 className="font-bold mb-4 border-b border-gray-100 pb-2 text-gray-900">30-Day Margin Flow (Gross vs Net Profit)</h3>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={historicalData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                    <XAxis dataKey="date" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} dy={10} />
-                    <YAxis tickFormatter={(val) => `₦${val/1000}k`} tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
-                    <Tooltip formatter={(value) => [`₦${value.toLocaleString()}`]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                    <Line type="monotone" name="Gross Revenue" dataKey="gross" stroke="#9ca3af" strokeWidth={2} dot={false} />
-                    <Line type="monotone" name="Net Profit" dataKey="net" stroke="#1A4D2E" strokeWidth={3} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">Financial Analytics</h1>
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-[24px] p-6 shadow-sm">
+                  <h3 className="text-xs md:text-sm font-bold text-blue-800 uppercase tracking-wider mb-1">7-Day Bulk Capital Expenditure</h3>
+                  <p className="text-3xl font-bold text-blue-900">{money(weeklyAnalytics.total_bulk_weekly)}</p>
+                  <p className="text-xs text-blue-600 mt-2">Total cash spent on BULK_RESTOCK in the last 7 days. This is an asset conversion, not a daily operational loss.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div className="bg-white border border-gray-100 p-6 rounded-[24px] shadow-sm h-[400px]">
+                    <h3 className="font-bold mb-4 border-b border-gray-100 pb-2 text-gray-900">7-Day Health (Profit vs. Expenses)</h3>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={weeklyAnalytics.comparison_chart} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                            <XAxis dataKey="day" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} dy={10} />
+                            <YAxis tickFormatter={(val) => `₦${val/1000}k`} tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
+                            <Tooltip formatter={(value) => [`₦${value.toLocaleString()}`]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                            <Bar name="Total Expenses" dataKey="expenses" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                            <Bar name="Net Profit" dataKey="profit" fill="#1A4D2E" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="bg-white border border-gray-100 p-6 rounded-[24px] shadow-sm h-[400px]">
+                    <h3 className="font-bold mb-4 border-b border-gray-100 pb-2 text-gray-900">30-Day Margin Flow (Gross vs Net Profit)</h3>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={historicalData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                        <XAxis dataKey="date" tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} dy={10} />
+                        <YAxis tickFormatter={(val) => `₦${val/1000}k`} tick={{fontSize: 12, fill: '#9ca3af'}} axisLine={false} tickLine={false} />
+                        <Tooltip formatter={(value) => [`₦${value.toLocaleString()}`]} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                        <Line type="monotone" name="Gross Revenue" dataKey="gross" stroke="#9ca3af" strokeWidth={2} dot={false} />
+                        <Line type="monotone" name="Net Profit" dataKey="net" stroke="#1A4D2E" strokeWidth={3} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
               </div>
             </div>
           )}
@@ -1204,7 +1228,7 @@ export default function App() {
                     <form onSubmit={handleMenuSubmit} className="flex flex-col sm:flex-row items-end gap-3 md:gap-4 mb-4">
                       <div className="w-full sm:flex-1"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Item Name</label><input type="text" required value={newMenu.item_name} onChange={e=>setNewMenu({...newMenu, item_name:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm"/></div>
                       <div className="w-full sm:w-24"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Price (₦)</label><input type="number" required value={newMenu.unit_price} onChange={e=>setNewMenu({...newMenu, unit_price:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:border-[#1A4D2E] text-sm"/></div>
-                      <div className="w-full sm:w-auto"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Type</label><select value={newMenu.category} onChange={e=>setNewMenu({...newMenu, category:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm focus:ring-2 focus:border-[#1A4D2E]"><option value="Strict">Strict (Proteins)</option><option value="Swallow">Swallow (Wraps)</option><option value="Carb">Loose (Carbs)</option></select></div>
+                      <div className="w-full sm:w-auto"><label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Type</label><select value={newMenu.category} onChange={e=>setNewMenu({...newMenu, category:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm focus:ring-2 focus:border-[#1A4D2E]"><option value="STRICT_UNIT">Strict (Proteins)</option><option value="SWALLOW">Swallow (Wraps)</option><option value="LOOSE_CARB">Loose (Carbs)</option></select></div>
                       <button type="submit" className="w-full sm:w-auto bg-[#1A4D2E] text-white px-4 py-2 rounded-xl font-bold shadow-sm">+</button>
                     </form>
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
