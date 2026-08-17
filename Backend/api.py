@@ -427,7 +427,8 @@ def log_evening_audit(data: AuditItem):
     strict_rev = sum(item.quantity * item.price for item in data.line_items)
     carb_rev = gross - strict_rev
     
-    net = gross - data.midDayCash - data.payroll - data.stewSoupCost
+    # CORRECTED MATH: Deducting rawCarbCost as Cost of Goods Sold
+    net = gross - data.midDayCash - data.payroll - data.stewSoupCost - data.rawCarbCost
     
     # TRUE FINANCIAL YIELD MATH: Carb Revenue divided by the Raw Capital Cost of Carbs cooked.
     yield_ratio = (carb_rev / data.rawCarbCost) if data.rawCarbCost > 0 else 0.0
